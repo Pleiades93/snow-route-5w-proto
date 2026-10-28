@@ -540,6 +540,74 @@ function mergeStrands(slices, pairs) {
   }
   return arr;
 }
+// Connection guarantee (Andrew, 2026-10-28, round 8): if two marked side
+// lines end at the same junction corner, they CONNECT - "some connect and
+// others are just shy of connecting" is a defect. The pairing bridges in
+// mergeStrands catch most corners; this pass sweeps up stragglers on
+// geometry alone: two chain ends whose junction vertices coincide, in
+// the same quadrant of that junction, within reach, are joined by the
+// first candidate path that crosses nothing - the side lines' own
+// corner, the corridor box corner, or the chord.
+function bridgeStragglers(chains) {
+  if (!JUNC) buildJunctions();
+  const revC = c => ({ pts: [...c.pts].reverse(), key: c.key, mem: c.mem, e0: c.e1, e1: c.e0 });
+  const pathBadNear = (pts, J) => {
+    for (let s2 = 0; s2 + 1 < pts.length; s2++) for (const n2 of names) {
+      const st = GEO[n2].stitched;
+      for (let si = 0; si + 1 < st.length; si++) if (ptSegM(J, st[si], st[si + 1]) < 13 && segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) return true;
+    }
+    return false;
+  };
+  const dirLL = (n, vi) => {
+    const st = GEO[n].stitched, a = XYOf(st[Math.max(0, vi - 1)]), b = XYOf(st[Math.min(st.length - 1, vi + 1)]);
+    const dx = b[0] - a[0], dy = b[1] - a[1], m = Math.hypot(dx, dy) || 1;
+    return [dy / m / MLAT, dx / m / MLNG];
+  };
+  const pathLen = pts => { let L = 0; for (let i = 0; i + 1 < pts.length; i++) L += jDistM(pts[i], pts[i + 1]); return L; };
+  for (let iter = 0; iter < 80; iter++) {
+    let merged = false;
+    outer:
+    for (let i = 0; i < chains.length; i++) for (let j = 0; j < chains.length; j++) {
+      if (i === j) continue;
+      const endsI = [{ at: 'e0', pt: chains[i].pts[0], meta: chains[i].e0 }, { at: 'e1', pt: chains[i].pts[chains[i].pts.length - 1], meta: chains[i].e1 }];
+      const endsJ = [{ at: 'e0', pt: chains[j].pts[0], meta: chains[j].e0 }, { at: 'e1', pt: chains[j].pts[chains[j].pts.length - 1], meta: chains[j].e1 }];
+      for (const E1 of endsI) for (const E2 of endsJ) {
+        if (!E1.meta || !E2.meta || E1.meta.n === E2.meta.n) continue;
+        const V1 = GEO[E1.meta.n].stitched[E1.meta.vi], V2 = GEO[E2.meta.n].stitched[E2.meta.vi];
+        if (coordKey(V1) !== coordKey(V2)) continue;
+        const V = V1;
+        if (jDistM(E1.pt, E2.pt) > 13) continue;
+        const J1 = (JUNC[E1.meta.n] || []).find(x => x.B === E2.meta.n && x.viA === E1.meta.vi);
+        const J2 = (JUNC[E2.meta.n] || []).find(x => x.B === E1.meta.n && x.viA === E2.meta.vi);
+        if (!J1 || !J2) continue;
+        const nA = J2.nB, nB = J1.nB, Vx = XYOf(V);
+        const signs = pt => { const w = XYOf(pt); return [Math.sign((w[0] - Vx[0]) * nA[0] + (w[1] - Vx[1]) * nA[1]), Math.sign((w[0] - Vx[0]) * nB[0] + (w[1] - Vx[1]) * nB[1])]; };
+        const s1 = signs(E1.pt), s2 = signs(E2.pt);
+        const sameQ = (s1[0] === 0 || s2[0] === 0 || s1[0] === s2[0]) && (s1[1] === 0 || s2[1] === 0 || s1[1] === s2[1]) && !(s1[0] !== 0 && s2[0] !== 0 && s1[0] !== s2[0]) && !(s1[1] !== 0 && s2[1] !== 0 && s1[1] !== s2[1]);
+        if (!sameQ) continue;
+        const dA = dirLL(E1.meta.n, E1.meta.vi), dB = dirLL(E2.meta.n, E2.meta.vi);
+        const along = (pt, d) => [pt[0] + d[0], pt[1] + d[1]];
+        const corner = lineHit(E1.pt, along(E1.pt, dA), E2.pt, along(E2.pt, dB));
+        const box = lineHit(E1.pt, along(E1.pt, dB), E2.pt, along(E2.pt, dA));
+        let bridge = null;
+        if (jDistM(E1.pt, E2.pt) < 1.2) bridge = [];
+        else for (const cand of [corner ? [corner] : null, box ? [box] : null, []]) {
+          if (!cand) continue;
+          const path = [E1.pt, ...cand, E2.pt];
+          if (pathLen(path) <= 15 && !pathBadNear(path, V)) { bridge = cand; break; }
+        }
+        if (!bridge) continue;
+        const ci = E1.at === 'e1' ? chains[i] : revC(chains[i]);
+        const cj = E2.at === 'e0' ? chains[j] : revC(chains[j]);
+        chains[i] = { pts: ci.pts.concat(bridge, cj.pts), key: ci.key, mem: ci.mem.concat(cj.mem), e0: ci.e0, e1: cj.e1 };
+        chains.splice(j, 1);
+        merged = true;
+        break outer;
+      }
+    }
+    if (!merged) break;
+  }
+}
 // An edge strand that ends at a junction whose partner stretch is COMPLETE
 // reaches onto that band's corner point, so the line flows into the solid
 // green instead of stopping short of it.
@@ -575,6 +643,7 @@ function buildFamilies() {
   const centres = mergeStrands(centreSlices, null);
   const bands = mergeStrands(bandSlices, null);
   const edges = mergeStrands(edgeSlices, pairs);
+  bridgeStragglers(edges);
   extendIntoBands(edges, pairs);
   LASTCHAINS = { centres, bands, edges };
   const fc = (list, colFn) => ({ type: 'FeatureCollection', features: list.map(sl => { const c = colFn(sl); return { type: 'Feature', properties: { col: c, colG: mute(c) }, geometry: { type: 'LineString', coordinates: GJ(sl.pts) } }; }) });
