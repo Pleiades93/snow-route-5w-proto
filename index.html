@@ -24,12 +24,14 @@
   #nogl { display: none; top: 64px; left: 10px; right: 10px; background: #7a1f1f; }
   #titleX { float: right; margin-left: 8px; padding: 0 7px; font-size: 15px; line-height: 1.45; }
   #panelShow { display: none; left: auto; right: 10px; bottom: 10px; font-size: 13px; }
+  #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
+<meta name="build" content="r9-1947">
 </head>
 <body>
 <div id="map"></div>
-<div id="title" class="chip"><button id="titleX" title="Hide">×</button><b>Route 5W — rendering prototype</b><br><span>Not the tracker. Tap a street, then mark its sides. Compare the three looks, day and night, at working zooms.</span></div>
+<div id="title" class="chip"><button id="titleX" title="Hide">×</button><b>Route 5W — rendering prototype</b><br><span>Not the tracker. Tap a street, then mark its sides. Compare the three looks, day and night, at working zooms. Build <b id="buildLab">?</b></span></div>
 <div id="nogl" class="chip">WebGL is unavailable in this browser, so the vector map can't draw here. Open this page on your phone instead.</div>
 <div id="panel" class="chip">
   <div id="status">Loading map…</div>
@@ -46,10 +48,11 @@
   <div class="row"><span class="lab">Selected</span>
     <button id="sideA" disabled>Left</button><button id="sideB" disabled>Right</button>
     <button id="streetDone" disabled>Street done</button><button id="streetReset" disabled>Reset street</button>
-    <button id="panelHide" style="margin-left:auto">Hide panel ▾</button>
+    <button id="panelHide" style="margin-left:auto">Hide panel ▾</button><button class="updBtn" style="margin-left:8px">⟳ Update</button>
   </div>
 </div>
 <button id="panelShow" class="chip">⚙ Controls</button>
+<button id="updShow" class="chip updBtn">⟳ Update</button>
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js" integrity="sha384-SYKAG6cglRMN0RVvhNeBY0r3FYKNOJtznwA0v7B5Vp9tr31xAHsZC0DqkQ/pZDmj" crossorigin="anonymous"></script>
 <script>
 'use strict';
@@ -1225,8 +1228,27 @@ document.getElementById('sideB').addEventListener('click', () => { if (sel) togg
 document.getElementById('streetDone').addEventListener('click', () => { if (!sel) return; pieces[sel.name] = pieces[sel.name].map(() => 3); applyStates(); });
 document.getElementById('streetReset').addEventListener('click', () => { if (!sel) return; pieces[sel.name] = pieces[sel.name].map(() => 0); applyStates(); });
 document.getElementById('titleX').addEventListener('click', () => { document.getElementById('title').style.display = 'none'; });
-document.getElementById('panelHide').addEventListener('click', () => { document.getElementById('panel').style.display = 'none'; document.getElementById('panelShow').style.display = 'block'; });
-document.getElementById('panelShow').addEventListener('click', () => { document.getElementById('panel').style.display = 'block'; document.getElementById('panelShow').style.display = 'none'; });
+document.getElementById('panelHide').addEventListener('click', () => { document.getElementById('panel').style.display = 'none'; document.getElementById('panelShow').style.display = 'block'; document.getElementById('updShow').style.display = 'block'; });
+document.getElementById('panelShow').addEventListener('click', () => { document.getElementById('panel').style.display = 'block'; document.getElementById('panelShow').style.display = 'none'; document.getElementById('updShow').style.display = 'none'; });
+// Update button (Andrew, 2026-10-28): the prototype link never changes,
+// but phones cache the page - this checks the served build stamp and,
+// if a newer build is live, reloads past the cache. Stamp is baked in
+// at build time (r9-1947).
+const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
+if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
+document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
+  const label = '⟳ Update · ' + BUILD;
+  btn.textContent = '⟳ Checking…'; btn.disabled = true;
+  const bust = location.pathname + '?v=' + Date.now();
+  try {
+    const r = await fetch(bust, { cache: 'no-store' });
+    const t = await r.text();
+    const m = t.match(/name="build" content="([^"]+)"/);
+    if (m && BUILD && m[1] !== BUILD) { location.replace(bust); return; }
+    btn.textContent = '✓ Up to date';
+    setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2600);
+  } catch (e) { location.replace(bust); }
+}));
 init();
 </script>
 </body>
