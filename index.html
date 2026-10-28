@@ -257,8 +257,8 @@ function offsetLine(pts, m) {
   return out;
 }
 
-let fidSeq = 0;
-const centreFeatures = [], edgeFeatures = [], labelFeatures = [];
+const labelFeatures = [];
+const GEO = {};
 // Left/Right naming (Andrew, 2026-10-28): every street has ONE fixed
 // direction - south end to north end, or west end to east end for
 // east-west streets. Left is the left-hand side in that direction: the
@@ -282,12 +282,7 @@ names.forEach(n => {
   // 3.3 m; and the lines end exactly at the street's ends - no overshoot
   // onto the next street, no uneven ends.
   const off0 = offsetLine(stitched, 3.3), off1 = offsetLine(stitched, -3.3);
-  cuts.forEach(([a, b], i) => {
-    centreFeatures.push({ type: 'Feature', id: fidSeq++, properties: { name: n, idx: i, main: MAIN.has(n) ? 1 : 0 }, geometry: { type: 'LineString', coordinates: GJ(stitched.slice(a, b + 1)) } });
-    [off0, off1].forEach((off, side) => {
-      edgeFeatures.push({ type: 'Feature', id: fidSeq++, properties: { name: n, idx: i, side }, geometry: { type: 'LineString', coordinates: GJ(off.slice(a, b + 1)) } });
-    });
-  });
+  GEO[n] = { stitched, cuts, off0, off1 };
   const p0 = stitched[0], p1 = stitched[stitched.length - 1];
   const dLat = p1[0] - p0[0], dLng = p1[1] - p0[1];
   const canonicalForward = Math.abs(dLat) >= Math.abs(dLng) ? dLat >= 0 : dLng >= 0;
@@ -301,12 +296,52 @@ names.forEach(n => {
   if (li < 0 || li >= segs.length) { li = 0; let bl = -1; segs.forEach((sg, j) => { const L = segLenM(sg); if (L > bl) { bl = L; li = j; } }); }
   labelFeatures.push({ type: 'Feature', properties: { name: n }, geometry: { type: 'LineString', coordinates: GJ(segs[li]) } });
 });
-const centreByKey = {}, edgeByKey = {};
-centreFeatures.forEach(f => { centreByKey[f.properties.name + '|' + f.properties.idx] = f.id; });
-edgeFeatures.forEach(f => { edgeByKey[f.properties.name + '|' + f.properties.idx + '|' + f.properties.side] = f.id; });
-const CENTRES = { type: 'FeatureCollection', features: centreFeatures };
-const EDGES = { type: 'FeatureCollection', features: edgeFeatures };
 const LABELS = { type: 'FeatureCollection', features: labelFeatures };
+// ---- run builders (Andrew, 2026-10-28): consecutive sectors with the same
+// display state merge into ONE feature, so the map engine draws the joints
+// itself - one continuous line through straights AND sharp turns, with no
+// per-sector round caps stacking into crosses/blobs where lines meet.
+function colOf(n, bits) { return bits === 3 ? GREEN : (MAIN.has(n) ? YELLOW : RED); }
+function buildCentres() {
+  const feats = [];
+  names.forEach(n => {
+    const g = GEO[n]; let start = 0;
+    for (let i = 1; i <= pieces[n].length; i++) {
+      if (i === pieces[n].length || colOf(n, pieces[n][i]) !== colOf(n, pieces[n][start])) {
+        feats.push({ type: 'Feature', properties: { name: n, col: colOf(n, pieces[n][start]) }, geometry: { type: 'LineString', coordinates: GJ(g.stitched.slice(g.cuts[start][0], g.cuts[i - 1][1] + 1)) } });
+        start = i;
+      }
+    }
+  });
+  return { type: 'FeatureCollection', features: feats };
+}
+function buildEdges() {
+  const feats = [];
+  names.forEach(n => {
+    const g = GEO[n];
+    [g.off0, g.off1].forEach((off, side) => {
+      let start = -1;
+      for (let i = 0; i <= pieces[n].length; i++) {
+        const on = i < pieces[n].length && !!(pieces[n][i] & (1 << side));
+        if (on && start < 0) start = i;
+        if (!on && start >= 0) { feats.push({ type: 'Feature', properties: { name: n, side }, geometry: { type: 'LineString', coordinates: GJ(off.slice(g.cuts[start][0], g.cuts[i - 1][1] + 1)) } }); start = -1; }
+      }
+    });
+  });
+  return { type: 'FeatureCollection', features: feats };
+}
+function buildSel(which) {   // the selected sector, drawn by the overlay stack
+  const feats = [];
+  if (sel) {
+    const g = GEO[sel.name], ab = g.cuts[sel.idx], bits = pieces[sel.name][sel.idx];
+    if (which === 'c') feats.push({ type: 'Feature', properties: { col: colOf(sel.name, bits) }, geometry: { type: 'LineString', coordinates: GJ(g.stitched.slice(ab[0], ab[1] + 1)) } });
+    else [g.off0, g.off1].forEach((off, side) => { if (bits & (1 << side)) feats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: GJ(off.slice(ab[0], ab[1] + 1)) } }); });
+  }
+  return { type: 'FeatureCollection', features: feats };
+}
+const HIT = { type: 'FeatureCollection', features: names.flatMap(n => GEO[n].cuts.map((ab, i) => ({ type: 'Feature', properties: { name: n, idx: i }, geometry: { type: 'LineString', coordinates: GJ(GEO[n].stitched.slice(ab[0], ab[1] + 1)) } }))) };
+let CUR = null;
+function rebuildData() { CUR = { centres: buildCentres(), edges: buildEdges(), sel: buildSel('c'), selEdges: buildSel('e') }; }
 
 function applyMixed() {
   pieces = freshPieces();
@@ -320,10 +355,10 @@ function applyMixed() {
   sel = { name: 'Velmar', idx: 6 };
 }
 applyMixed();
+rebuildData();
 
 // ================= map & treatments =================
 const STYLES = { day: 'https://tiles.openfreemap.org/styles/positron', night: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json' };
-const stateCol = ['case', ['boolean', ['feature-state', 'both'], false], GREEN, ['boolean', ['feature-state', 'main'], false], YELLOW, RED];
 const surfW = ['interpolate', ['linear'], ['zoom'], 14, 2.5, 16, 6.5, 17, 9.5, 18, 15, 19, 24];
 let map = null, treatment = 1, baseMode = 'day', fontStack = ['Noto Sans Regular'];
 
@@ -334,29 +369,37 @@ function firstSymbolId() {
 }
 function addStack() {
   if (!map.getSource('centres')) {
-    map.addSource('centres', { type: 'geojson', data: CENTRES });
-    map.addSource('edges', { type: 'geojson', data: EDGES });
+    map.addSource('centres', { type: 'geojson', data: CUR.centres });
+    map.addSource('edges', { type: 'geojson', data: CUR.edges });
+    map.addSource('sel', { type: 'geojson', data: CUR.sel });
+    map.addSource('selEdges', { type: 'geojson', data: CUR.selEdges });
+    map.addSource('hit', { type: 'geojson', data: HIT });
     map.addSource('labels', { type: 'geojson', data: LABELS });
   }
   const before = firstSymbolId();
   const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer, before); };
   const line = (id, source, paint, layout, filter) => { const o = { id, type: 'line', source, layout: Object.assign({ 'line-cap': 'round', 'line-join': 'round' }, layout || {}), paint }; if (filter) o.filter = filter; return o; };   // NOTE: a present-but-undefined `filter` key makes MapLibre silently drop the layer (found by the QA tour, 2026-10-28)
   // --- T0: the current tracker look, reproduced in GL (the control) ---
-  add(line('t0-centre', 'centres', { 'line-color': stateCol, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': ['case', ['boolean', ['feature-state', 'sel'], false], 1, ['boolean', ['feature-state', 'both'], false], 0.85, 0.58] }));
-  add(line('t0-edgeA', 'centres', { 'line-color': GREEN, 'line-width': 4, 'line-offset': -6, 'line-opacity': ['case', ['boolean', ['feature-state', 'sideA'], false], 0.9, 0] }));
-  add(line('t0-edgeB', 'centres', { 'line-color': GREEN, 'line-width': 4, 'line-offset': 6, 'line-opacity': ['case', ['boolean', ['feature-state', 'sideB'], false], 0.9, 0] }));
+  add(line('t0-centre', 'centres', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 0.9 }));
+  add(line('t0-edge', 'edges', { 'line-color': GREEN, 'line-width': 3.5, 'line-opacity': 0.9 }));
   // --- T1: integrated — the road surface itself carries the state ---
-  add(line('t1-glow', 'centres', { 'line-color': stateCol, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 10, 16, 16, 17, 20, 18, 26, 19, 36], 'line-opacity': ['case', ['boolean', ['feature-state', 'sel'], false], baseMode === 'night' ? 0.26 : 0.32, 0], 'line-blur': 7 }));
   add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': baseMode === 'night' ? 0.55 : 0.4 }));
-  add(line('t1-surface', 'centres', { 'line-color': stateCol, 'line-width': surfW, 'line-opacity': 0.92 }));
-  add(line('t1-edge', 'edges', { 'line-color': GREEN, 'line-width': 3, 'line-opacity': ['case', ['boolean', ['feature-state', 'done'], false], 0.95, 0] }));
+  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 0.92 }));
+  add(line('t1-edge', 'edges', { 'line-color': GREEN, 'line-width': 3, 'line-opacity': 0.95 }));
   // --- T2: glow accent — basemap roads untouched, light instead of paint ---
-  add(line('t2-glow', 'centres', { 'line-color': stateCol, 'line-width': 13, 'line-opacity': ['case', ['boolean', ['feature-state', 'sel'], false], 0.5, 0.3], 'line-blur': 8 }));
-  add(line('t2-core', 'centres', { 'line-color': stateCol, 'line-width': ['case', ['boolean', ['feature-state', 'sel'], false], 5, 3.4], 'line-opacity': 0.95 }));
-  add(line('t2-edgeglow', 'edges', { 'line-color': GREEN, 'line-width': 10, 'line-blur': 6, 'line-opacity': ['case', ['boolean', ['feature-state', 'done'], false], 0.5, 0] }));
-  add(line('t2-edge', 'edges', { 'line-color': GREEN, 'line-width': 3.2, 'line-opacity': ['case', ['boolean', ['feature-state', 'done'], false], 0.95, 0] }));
+  add(line('t2-glow', 'centres', { 'line-color': ['get', 'col'], 'line-width': 13, 'line-opacity': 0.3, 'line-blur': 8 }));
+  add(line('t2-core', 'centres', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 0.95 }));
+  add(line('t2-edgeglow', 'edges', { 'line-color': GREEN, 'line-width': 10, 'line-blur': 6, 'line-opacity': 0.5 }));
+  add(line('t2-edge', 'edges', { 'line-color': GREEN, 'line-width': 3.2, 'line-opacity': 0.95 }));
+  // --- selection overlay (every treatment): the SAME glow, intensified -
+  // wider, stronger halo + a brighter core, so the selected sector is
+  // unmistakable without switching looks (Andrew, 2026-10-28) ---
+  add(line('sel-glow', 'sel', { 'line-color': ['get', 'col'], 'line-width': 28, 'line-blur': 6, 'line-opacity': 0.6 }));
+  add(line('sel-core', 'sel', { 'line-color': ['get', 'col'], 'line-width': 5.5, 'line-opacity': 1 }));
+  add(line('sel-hot', 'sel', { 'line-color': '#ffffff', 'line-width': 2.2, 'line-opacity': 0.9 }));   // white-hot filament: the selection cue that survives same-colour runs
+  add(line('sel-edge', 'selEdges', { 'line-color': GREEN, 'line-width': 4.5, 'line-opacity': 1 }));
   // --- hit + labels (every treatment) ---
-  add(line('hit', 'centres', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
+  add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
     map.addLayer({ id: 'streetnames', type: 'symbol', source: 'labels', layout: { 'symbol-placement': 'line', 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 7.5, 16, 10.5, 18, 20], 'text-rotation-alignment': 'map', 'text-pitch-alignment': 'viewport' }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.4 } });
   }
@@ -373,16 +416,13 @@ function setTreatment(t) {
   });
 }
 function applyStates() {
-  if (!map || !map.getSource('centres')) return;
-  names.forEach(n => {
-    pieces[n].forEach((bits, i) => {
-      const id = centreByKey[n + '|' + i];
-      map.setFeatureState({ source: 'centres', id }, { both: bits === 3, sideA: !!(bits & 1), sideB: !!(bits & 2), main: MAIN.has(n), sel: !!sel && sel.name === n && sel.idx === i });
-      [0, 1].forEach(side => {
-        map.setFeatureState({ source: 'edges', id: edgeByKey[n + '|' + i + '|' + side] }, { done: !!(bits & (1 << side)) });
-      });
-    });
-  });
+  rebuildData();
+  if (map && map.getSource('centres')) {
+    map.getSource('centres').setData(CUR.centres);
+    map.getSource('edges').setData(CUR.edges);
+    map.getSource('sel').setData(CUR.sel);
+    map.getSource('selEdges').setData(CUR.selEdges);
+  }
   renderStatus();
 }
 function streetDone(n) { return pieces[n].every(b => b === 3); }
