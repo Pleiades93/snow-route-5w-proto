@@ -42,7 +42,7 @@
     <button data-preset="fresh">Fresh</button><button data-preset="mixed" class="on">Mixed day</button><button data-preset="done">All done</button>
   </div>
   <div class="row"><span class="lab">Selected</span>
-    <button id="sideA" disabled>Side A</button><button id="sideB" disabled>Side B</button>
+    <button id="sideA" disabled>Left</button><button id="sideB" disabled>Right</button>
     <button id="streetDone" disabled>Street done</button><button id="streetReset" disabled>Reset street</button>
   </div>
 </div>
@@ -237,47 +237,64 @@ pieces = freshPieces();
 let sel = null;   // {name, idx}
 
 const GJ = pts => pts.map(p => [p[1], p[0]]);   // [lat,lng] -> [lng,lat]
-// Trim `m` metres off both ends of a [lat,lng] polyline (junction gaps).
-function trimLine(pts, mStart, mEnd) {
-  let p = pts.slice();
-  const cut = (arr, m, fromStart) => {
-    let left = m;
-    while (arr.length > 2 && left > 0) {
-      const a = fromStart ? arr[0] : arr[arr.length - 1], b = fromStart ? arr[1] : arr[arr.length - 2];
-      const d = jDistM(a, b);
-      if (d <= left) { arr.splice(fromStart ? 0 : arr.length - 1, 1); left -= d; }
-      else { const t = left / d; const np = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]; if (fromStart) arr[0] = np; else arr[arr.length - 1] = np; left = 0; }
-    }
-    return arr;
-  };
-  p = cut(p, mStart, true); p = cut(p, mEnd, false);
-  return p;
-}
 // Geographic offset of a [lat,lng] polyline by `m` metres (positive = left
 // of the direction of travel), in the same flat-metre space the app uses.
 function offsetLine(pts, m) {
   const P = pts.map(p => [p[1] * MLNG, p[0] * MLAT]);
   const out = [];
   for (let i = 0; i < P.length; i++) {
-    const prev = P[Math.max(0, i - 1)], next = P[Math.min(P.length - 1, i + 1)];
-    let dx = next[0] - prev[0], dy = next[1] - prev[1];
+    // Direction from a WINDOW of at least ~2 m each way, not the immediate
+    // neighbours: the route traces carry near-duplicate points (some 5 cm
+    // apart), and an immediate-neighbour normal there is noise - it
+    // collapsed some edge points onto the centreline (gate, 2026-10-28).
+    let a = i, b = i;
+    while (a > 0 && Math.hypot(P[i][0] - P[a][0], P[i][1] - P[a][1]) < 2) a--;
+    while (b < P.length - 1 && Math.hypot(P[b][0] - P[i][0], P[b][1] - P[i][1]) < 2) b++;
+    let dx = P[b][0] - P[a][0], dy = P[b][1] - P[a][1];
     const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
-    out.push([(P[i][1] + (-dy) * m) / MLAT, (P[i][0] + dx * m) / MLNG]);
+    out.push([(P[i][1] + dx * m) / MLAT, (P[i][0] + (-dy) * m) / MLNG]);   // offset vector = m * (-dy, dx): x takes -dy, y takes dx. A transposed pair here shifted the line ALONG the street instead of beside it (Andrew's 'overshoot', 2026-10-28)
   }
   return out;
 }
 
 let fidSeq = 0;
 const centreFeatures = [], edgeFeatures = [], labelFeatures = [];
+// Left/Right naming (Andrew, 2026-10-28): every street has ONE fixed
+// direction - south end to north end, or west end to east end for
+// east-west streets. Left is the left-hand side in that direction: the
+// same rule for every street, fixed to the street itself, never flipping
+// with the direction of travel. LEFTBIT[name] = which state bit is Left;
+// LEFTSIDE[name] = the compass side that is, for the status line.
+const LEFTBIT = {}, LEFTSIDE = {};
 names.forEach(n => {
   const parts = STRETCH[n].parts;
+  // The street's whole stitched line; sectors are exact slices of it
+  // (sector k+1 starts at the very point sector k ends).
+  const stitched = [], cuts = [];
   parts.forEach((part, i) => {
-    const trimmed = trimLine(part, i === 0 ? 0 : 3, i === parts.length - 1 ? 0 : 3);
-    centreFeatures.push({ type: 'Feature', id: fidSeq++, properties: { name: n, idx: i, main: MAIN.has(n) ? 1 : 0 }, geometry: { type: 'LineString', coordinates: GJ(trimmed) } });
-    [0, 1].forEach(side => {
-      edgeFeatures.push({ type: 'Feature', id: fidSeq++, properties: { name: n, idx: i, side }, geometry: { type: 'LineString', coordinates: GJ(offsetLine(trimmed, side === 0 ? 3.3 : -3.3)) } });
+    const a = i === 0 ? 0 : stitched.length - 1;
+    if (i === 0) stitched.push(...part); else stitched.push(...part.slice(1));
+    cuts.push([a, stitched.length - 1]);
+  });
+  // Offsets computed ONCE over the whole line (the tracker's v5.79 method):
+  // a boundary vertex gets ONE shared offset point, so a side marked across
+  // consecutive sectors is one continuous line; both sides sit at the same
+  // 3.3 m; and the lines end exactly at the street's ends - no overshoot
+  // onto the next street, no uneven ends.
+  const off0 = offsetLine(stitched, 3.3), off1 = offsetLine(stitched, -3.3);
+  cuts.forEach(([a, b], i) => {
+    centreFeatures.push({ type: 'Feature', id: fidSeq++, properties: { name: n, idx: i, main: MAIN.has(n) ? 1 : 0 }, geometry: { type: 'LineString', coordinates: GJ(stitched.slice(a, b + 1)) } });
+    [off0, off1].forEach((off, side) => {
+      edgeFeatures.push({ type: 'Feature', id: fidSeq++, properties: { name: n, idx: i, side }, geometry: { type: 'LineString', coordinates: GJ(off.slice(a, b + 1)) } });
     });
   });
+  const p0 = stitched[0], p1 = stitched[stitched.length - 1];
+  const dLat = p1[0] - p0[0], dLng = p1[1] - p0[1];
+  const canonicalForward = Math.abs(dLat) >= Math.abs(dLng) ? dLat >= 0 : dLng >= 0;
+  LEFTBIT[n] = canonicalForward ? 0 : 1;   // bit 0 is the left of the stitched direction
+  const leftOff = LEFTBIT[n] === 0 ? off0 : off1, mid = Math.floor(stitched.length / 2);
+  const dx = (leftOff[mid][1] - stitched[mid][1]) * MLNG, dy = (leftOff[mid][0] - stitched[mid][0]) * MLAT;
+  LEFTSIDE[n] = Math.abs(dx) >= Math.abs(dy) ? (dx < 0 ? 'west side' : 'east side') : (dy > 0 ? 'north side' : 'south side');
   // label line: the SPOT segment (or the longest), like the app's labels
   const segs = ROADS[n];
   let li = (SPOT[n] ? SPOT[n][0] : -1);
@@ -374,9 +391,10 @@ function renderStatus() {
   const a = document.getElementById('sideA'), b = document.getElementById('sideB'), sd = document.getElementById('streetDone'), sr = document.getElementById('streetReset');
   if (!sel) { el.textContent = 'Tap a street on the map.'; a.disabled = b.disabled = sd.disabled = sr.disabled = true; return; }
   const bits = pieces[sel.name][sel.idx], total = pieces[sel.name].length;
+  const lb = LEFTBIT[sel.name], rb = 1 - lb;
   const sideTxt = v => v ? 'done ✓' : 'not done';
-  el.innerHTML = '<b>' + sel.name + '</b> — stretch ' + (sel.idx + 1) + ' of ' + total + ' · Side A ' + sideTxt(bits & 1) + ' · Side B ' + sideTxt(bits & 2) + (streetDone(sel.name) ? ' · street complete' : '');
-  a.textContent = 'Side A ' + (bits & 1 ? '✓' : ''); b.textContent = 'Side B ' + (bits & 2 ? '✓' : '');
+  el.innerHTML = '<b>' + sel.name + '</b> — stretch ' + (sel.idx + 1) + ' of ' + total + ' · Left (' + LEFTSIDE[sel.name] + ') ' + sideTxt(bits & (1 << lb)) + ' · Right ' + sideTxt(bits & (1 << rb)) + (streetDone(sel.name) ? ' · street complete' : '');
+  a.textContent = 'Left ' + (bits & (1 << lb) ? '✓' : ''); b.textContent = 'Right ' + (bits & (1 << rb) ? '✓' : '');
   a.disabled = b.disabled = sd.disabled = sr.disabled = false;
 }
 
@@ -443,8 +461,8 @@ document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('clic
   applyStates();
 }));
 const toggleSide = bit => { if (!sel) return; pieces[sel.name][sel.idx] ^= bit; applyStates(); };
-document.getElementById('sideA').addEventListener('click', () => toggleSide(1));
-document.getElementById('sideB').addEventListener('click', () => toggleSide(2));
+document.getElementById('sideA').addEventListener('click', () => { if (sel) toggleSide(1 << LEFTBIT[sel.name]); });
+document.getElementById('sideB').addEventListener('click', () => { if (sel) toggleSide(1 << (1 - LEFTBIT[sel.name])); });
 document.getElementById('streetDone').addEventListener('click', () => { if (!sel) return; pieces[sel.name] = pieces[sel.name].map(() => 3); applyStates(); });
 document.getElementById('streetReset').addEventListener('click', () => { if (!sel) return; pieces[sel.name] = pieces[sel.name].map(() => 0); applyStates(); });
 init();
