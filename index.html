@@ -326,17 +326,18 @@ function addStack() {
   const line = (id, source, paint, layout, filter) => { const o = { id, type: 'line', source, layout: Object.assign({ 'line-cap': 'round', 'line-join': 'round' }, layout || {}), paint }; if (filter) o.filter = filter; return o; };   // NOTE: a present-but-undefined `filter` key makes MapLibre silently drop the layer (found by the QA tour, 2026-10-28)
   // --- T0: the current tracker look, reproduced in GL (the control) ---
   add(line('t0-centre', 'centres', { 'line-color': stateCol, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': ['case', ['boolean', ['feature-state', 'sel'], false], 1, ['boolean', ['feature-state', 'both'], false], 0.85, 0.58] }));
-  add(line('t0-edgeA', 'centres', { 'line-color': GREEN, 'line-width': 4, 'line-offset': -6, 'line-opacity': 0.9 }, {}, ['==', ['feature-state', 'sideA'], true]));
-  add(line('t0-edgeB', 'centres', { 'line-color': GREEN, 'line-width': 4, 'line-offset': 6, 'line-opacity': 0.9 }, {}, ['==', ['feature-state', 'sideB'], true]));
+  add(line('t0-edgeA', 'centres', { 'line-color': GREEN, 'line-width': 4, 'line-offset': -6, 'line-opacity': ['case', ['boolean', ['feature-state', 'sideA'], false], 0.9, 0] }));
+  add(line('t0-edgeB', 'centres', { 'line-color': GREEN, 'line-width': 4, 'line-offset': 6, 'line-opacity': ['case', ['boolean', ['feature-state', 'sideB'], false], 0.9, 0] }));
   // --- T1: integrated — the road surface itself carries the state ---
-  add(line('t1-glow', 'centres', { 'line-color': stateCol, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 10, 16, 16, 17, 20, 18, 26, 19, 36], 'line-opacity': baseMode === 'night' ? 0.26 : 0.32, 'line-blur': 7 }, {}, ['==', ['feature-state', 'sel'], true]));
+  add(line('t1-glow', 'centres', { 'line-color': stateCol, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 10, 16, 16, 17, 20, 18, 26, 19, 36], 'line-opacity': ['case', ['boolean', ['feature-state', 'sel'], false], baseMode === 'night' ? 0.26 : 0.32, 0], 'line-blur': 7 }));
   add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': baseMode === 'night' ? 0.55 : 0.4 }));
   add(line('t1-surface', 'centres', { 'line-color': stateCol, 'line-width': surfW, 'line-opacity': 0.92 }));
-  add(line('t1-edge', 'edges', { 'line-color': GREEN, 'line-width': 2.6, 'line-opacity': 0.95 }, {}, ['==', ['feature-state', 'done'], true]));
+  add(line('t1-edge', 'edges', { 'line-color': GREEN, 'line-width': 3, 'line-opacity': ['case', ['boolean', ['feature-state', 'done'], false], 0.95, 0] }));
   // --- T2: glow accent — basemap roads untouched, light instead of paint ---
   add(line('t2-glow', 'centres', { 'line-color': stateCol, 'line-width': 13, 'line-opacity': ['case', ['boolean', ['feature-state', 'sel'], false], 0.5, 0.3], 'line-blur': 8 }));
   add(line('t2-core', 'centres', { 'line-color': stateCol, 'line-width': ['case', ['boolean', ['feature-state', 'sel'], false], 5, 3.4], 'line-opacity': 0.95 }));
-  add(line('t2-edge', 'edges', { 'line-color': GREEN, 'line-width': 3, 'line-opacity': 0.95 }, {}, ['==', ['feature-state', 'done'], true]));
+  add(line('t2-edgeglow', 'edges', { 'line-color': GREEN, 'line-width': 10, 'line-blur': 6, 'line-opacity': ['case', ['boolean', ['feature-state', 'done'], false], 0.5, 0] }));
+  add(line('t2-edge', 'edges', { 'line-color': GREEN, 'line-width': 3.2, 'line-opacity': ['case', ['boolean', ['feature-state', 'done'], false], 0.95, 0] }));
   // --- hit + labels (every treatment) ---
   add(line('hit', 'centres', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
