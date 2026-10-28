@@ -22,12 +22,14 @@
   #status { font-size: 13px; min-height: 17px; }
   #status b { color: #ffd24a; }
   #nogl { display: none; top: 64px; left: 10px; right: 10px; background: #7a1f1f; }
+  #titleX { float: right; margin-left: 8px; padding: 0 7px; font-size: 15px; line-height: 1.45; }
+  #panelShow { display: none; left: auto; right: 10px; bottom: 10px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
 </head>
 <body>
 <div id="map"></div>
-<div id="title" class="chip"><b>Route 5W — rendering prototype</b><br><span>Not the tracker. Tap a street, then mark its sides. Compare the three looks, day and night, at working zooms.</span></div>
+<div id="title" class="chip"><button id="titleX" title="Hide">×</button><b>Route 5W — rendering prototype</b><br><span>Not the tracker. Tap a street, then mark its sides. Compare the three looks, day and night, at working zooms.</span></div>
 <div id="nogl" class="chip">WebGL is unavailable in this browser, so the vector map can't draw here. Open this page on your phone instead.</div>
 <div id="panel" class="chip">
   <div id="status">Loading map…</div>
@@ -44,8 +46,10 @@
   <div class="row"><span class="lab">Selected</span>
     <button id="sideA" disabled>Left</button><button id="sideB" disabled>Right</button>
     <button id="streetDone" disabled>Street done</button><button id="streetReset" disabled>Reset street</button>
+    <button id="panelHide" style="margin-left:auto">Hide panel ▾</button>
   </div>
 </div>
+<button id="panelShow" class="chip">⚙ Controls</button>
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js" integrity="sha384-SYKAG6cglRMN0RVvhNeBY0r3FYKNOJtznwA0v7B5Vp9tr31xAHsZC0DqkQ/pZDmj" crossorigin="anonymous"></script>
 <script>
 'use strict';
@@ -297,15 +301,17 @@ names.forEach(n => {
   labelFeatures.push({ type: 'Feature', properties: { name: n }, geometry: { type: 'LineString', coordinates: GJ(segs[li]) } });
 });
 const LABELS = { type: 'FeatureCollection', features: labelFeatures };
-// ---- run builders (Andrew, 2026-10-28): consecutive sectors with the same
-// display state merge into ONE feature, so the map engine draws the joints
-// itself - one continuous line through straights AND sharp turns, with no
-// per-sector round caps stacking into crosses/blobs where lines meet.
+// ---- unified strands (Andrew, 2026-10-28): the route is painted as
+// STRANDS, not per-street pieces. Slices of the same colour that touch -
+// along a street OR across a junction, through straights and right turns -
+// merge into ONE polyline, so wherever the same colours meet they read as
+// one painted shape, the engine drawing every joint. A completed stretch
+// is not a core flanked by two side lines: completed stretches form the
+// BAND family - one solid ribbon at road width.
 function colOf(n, bits) { return bits === 3 ? GREEN : (MAIN.has(n) ? YELLOW : RED); }
 // Selection by vibrancy (Andrew, 2026-10-28 - the model he designed on
 // 2026-10-26): everything rests MUTED (same colour, saturation cut), the
 // selected sector renders the full vibrant colour at the same glow spec.
-// No extra halo, no filament - the colour pop IS the selection signal.
 function mute(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255, g = parseInt(hex.slice(3, 5), 16) / 255, b = parseInt(hex.slice(5, 7), 16) / 255;
   const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
@@ -318,11 +324,6 @@ function mute(hex) {
   return '#' + rgb.map(v => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('');
 }
 const MUGREEN = mute(GREEN);
-// ---- junction links: where two streets meet, a marked side of one street
-// joins the marked side of the other AROUND THEIR SHARED CORNER, so a side
-// marked through a turn (Valeria -> Fifth -> Bourbon) reads as one line.
-// Pairing rule: two side points at a junction connect iff the chord between
-// them crosses NEITHER street's centreline (the same-quadrant test).
 function segCross(p1, p2, p3, p4) {
   const a = XYOf(p1), b = XYOf(p2), c = XYOf(p3), d = XYOf(p4);
   const o = (x, y, z) => (y[0] - x[0]) * (z[1] - x[1]) - (y[1] - x[1]) * (z[0] - x[0]);
@@ -336,97 +337,155 @@ function lineHit(p1, p2, p3, p4) {
   const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den;
   return [(a[1] + t * (b[1] - a[1])) / MLAT, (a[0] + t * (b[0] - a[0])) / MLNG];
 }
-function buildLinks() {
+const coordKey = p => p[0].toFixed(7) + ',' + p[1].toFixed(7);
+// Junction pairing: at every shared vertex, which marked side continues
+// into which around their shared corner. A pair survives only when the
+// corner path crosses no centreline segment near the junction.
+function junctionPairs() {
   const at = {};
-  names.forEach(n => GEO[n].stitched.forEach((pt, vi) => {
-    const k = pt[0].toFixed(7) + ',' + pt[1].toFixed(7);
-    (at[k] = at[k] || []).push({ n, vi });
-  }));
-  const feats = [], seen = new Set();
-  Object.entries(at).forEach(([k, list]) => {
+  names.forEach(n => GEO[n].stitched.forEach((pt, vi) => { const k = coordKey(pt); (at[k] = at[k] || []).push({ n, vi }); }));
+  const pairs = {};
+  const link = (A, B, corner) => {
+    const ka = A.n + '|' + A.vi + '|' + A.side, kb = B.n + '|' + B.vi + '|' + B.side;
+    (pairs[ka] = pairs[ka] || []).push({ n2: B.n, vi2: B.vi, side2: B.side, corner });
+    (pairs[kb] = pairs[kb] || []).push({ n2: A.n, vi2: A.vi, side2: A.side, corner });
+  };
+  Object.values(at).forEach(list => {
     if (new Set(list.map(e => e.n)).size < 2) return;
     const cand = [];
     list.forEach(({ n, vi }) => {
       const g = GEO[n];
       [0, 1].forEach(side => {
-        const off = side === 0 ? g.off0 : g.off1;
         const present = g.cuts.some((ab, ci) => vi >= ab[0] && vi <= ab[1] && (pieces[n][ci] & (1 << side)));
-        if (present) cand.push({ n, vi, side, pt: off[vi] });
+        if (present) cand.push({ n, vi, side, pt: (side === 0 ? g.off0 : g.off1)[vi] });
       });
     });
     for (let i = 0; i < cand.length; i++) for (let j = i + 1; j < cand.length; j++) {
       const A = cand[i], B = cand[j];
       if (A.n === B.n) continue;
-      const pk = k + '|' + A.n + A.vi + '|' + A.side + '|' + B.n + B.vi + '|' + B.side;
-      if (seen.has(pk)) continue;
-      if (jDistM(A.pt, B.pt) > 9.5) continue;   // not the same corner
+      if (jDistM(A.pt, B.pt) > 9.5) continue;
       const J = GEO[A.n].stitched[A.vi];
       const ext = C => { const off = C.side === 0 ? GEO[C.n].off0 : GEO[C.n].off1; return C.vi > 0 ? [off[C.vi - 1], off[C.vi]] : [off[C.vi], off[C.vi + 1]]; };
       const ea = ext(A), eb = ext(B);
-      const corner = lineHit(ea[0], ea[1], eb[0], eb[1]);
-      // The drawn path (via the miter corner, else the chord) must not cross
-      // ANY centreline segment near the junction - the adjacent-segments-only
-      // test let 92 bad links through in the all-done gate (2026-10-28).
+      const hitP = lineHit(ea[0], ea[1], eb[0], eb[1]);
       const pathBad = pts => {
         for (let s2 = 0; s2 + 1 < pts.length; s2++) for (const n2 of names) {
           const st = GEO[n2].stitched;
-          for (let si = 0; si + 1 < st.length; si++) {
-            // distance from J to the SEGMENT (not its midpoint - a single
-            // trace leg can run 100 m+ and still pass through the junction)
-            if (ptSegM(J, st[si], st[si + 1]) < 13 && segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) return true;
-          }
+          for (let si = 0; si + 1 < st.length; si++) if (ptSegM(J, st[si], st[si + 1]) < 13 && segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) return true;
         }
         return false;
       };
-      let pts = corner && jDistM(corner, J) < 10 ? [A.pt, corner, B.pt] : [A.pt, B.pt];
+      let pts = hitP && jDistM(hitP, J) < 10 ? [A.pt, hitP, B.pt] : [A.pt, B.pt];
       if (pathBad(pts)) pts = [A.pt, B.pt];
       if (pathBad(pts)) continue;
-      seen.add(pk);
-      feats.push({ type: 'Feature', properties: { name: 'link', col: MUGREEN }, geometry: { type: 'LineString', coordinates: GJ(pts) } });
+      link(A, B, pts.length === 3 ? pts[1] : null);
     }
   });
-  return feats;
+  return pairs;
 }
-function buildCentres() {
-  const feats = [];
-  names.forEach(n => {
-    const g = GEO[n]; let start = 0;
-    for (let i = 1; i <= pieces[n].length; i++) {
-      if (i === pieces[n].length || colOf(n, pieces[n][i]) !== colOf(n, pieces[n][start])) {
-        feats.push({ type: 'Feature', properties: { name: n, col: mute(colOf(n, pieces[n][start])) }, geometry: { type: 'LineString', coordinates: GJ(g.stitched.slice(g.cuts[start][0], g.cuts[i - 1][1] + 1)) } });
-        start = i;
-      }
+// Strand merging: join slices of one family whose ends touch (exact shared
+// point) or, for edges, whose ends pair at a junction (bridge = the corner
+// point). Any same-colour pairing at a junction renders as one shape, so
+// merges simply run to a fixpoint, exact joins preferred over hops.
+function mergeStrands(slices, pairs) {
+  const rev = sl => ({ pts: [...sl.pts].reverse(), key: sl.key, mem: sl.mem, e0: sl.e1, e1: sl.e0 });
+  const joinInfo = (a, b) => {
+    const out = [];
+    const aS = coordKey(a.pts[0]), aE = coordKey(a.pts[a.pts.length - 1]);
+    [b, rev(b)].forEach(v => {
+      if (coordKey(v.pts[0]) === aE) out.push({ score: 2, merged: { pts: a.pts.concat(v.pts.slice(1)), key: a.key, mem: a.mem.concat(v.mem), e0: a.e0, e1: v.e1 } });
+      if (coordKey(v.pts[v.pts.length - 1]) === aS) out.push({ score: 2, merged: { pts: v.pts.concat(a.pts.slice(1)), key: a.key, mem: v.mem.concat(a.mem), e0: v.e0, e1: a.e1 } });
+    });
+    if (pairs) {
+      [[a.e1, true], [a.e0, false]].forEach(([meta, atEnd]) => {
+        if (!meta) return;
+        (pairs[meta.n + '|' + meta.vi + '|' + meta.side] || []).forEach(pr => {
+          const match = m => m && m.n === pr.n2 && m.vi === pr.vi2 && m.side === pr.side2;
+          const bo = match(b.e0) ? b : match(b.e1) ? rev(b) : null;
+          if (!bo) return;
+          const bridge = pr.corner ? [pr.corner] : [];
+          if (atEnd) out.push({ score: 1, merged: { pts: a.pts.concat(bridge, bo.pts), key: a.key, mem: a.mem.concat(bo.mem), e0: a.e0, e1: bo.e1 } });
+          else out.push({ score: 1, merged: { pts: [...bo.pts].reverse().concat(bridge.slice().reverse(), a.pts), key: a.key, mem: bo.mem.concat(a.mem), e0: bo.e1, e1: a.e1 } });
+        });
+      });
     }
-  });
-  return { type: 'FeatureCollection', features: feats };
+    return out;
+  };
+  const arr = slices.slice();
+  for (;;) {
+    let best = null;
+    for (let i = 0; i < arr.length; i++) for (let j = 0; j < arr.length; j++) {
+      if (i === j || arr[i].key !== arr[j].key) continue;
+      joinInfo(arr[i], arr[j]).forEach(c => { if (!best || c.score > best.score) best = { i, j, merged: c.merged }; });
+    }
+    if (!best) break;
+    arr[best.i] = best.merged;
+    arr.splice(best.j, 1);
+  }
+  return arr;
 }
-function buildEdges() {
-  const feats = [];
-  names.forEach(n => {
-    const g = GEO[n];
-    [g.off0, g.off1].forEach((off, side) => {
-      let start = -1;
-      for (let i = 0; i <= pieces[n].length; i++) {
-        const on = i < pieces[n].length && !!(pieces[n][i] & (1 << side));
-        if (on && start < 0) start = i;
-        if (!on && start >= 0) { feats.push({ type: 'Feature', properties: { name: n, side, col: MUGREEN }, geometry: { type: 'LineString', coordinates: GJ(off.slice(g.cuts[start][0], g.cuts[i - 1][1] + 1)) } }); start = -1; }
-      }
+// An edge strand that ends at a junction whose partner stretch is COMPLETE
+// reaches onto that band's corner point, so the line flows into the solid
+// green instead of stopping short of it.
+function extendIntoBands(edgeChains, pairs) {
+  edgeChains.forEach(s => {
+    [[s.e1, true], [s.e0, false]].forEach(([meta, atEnd]) => {
+      if (!meta) return;
+      (pairs[meta.n + '|' + meta.vi + '|' + meta.side] || []).forEach(pr => {
+        if (!pr.corner) return;
+        const g2 = GEO[pr.n2];
+        const ci = g2.cuts.findIndex(ab => pr.vi2 >= ab[0] && pr.vi2 <= ab[1]);
+        if (ci >= 0 && pieces[pr.n2][ci] === 3) s.pts = atEnd ? s.pts.concat([pr.corner]) : [pr.corner].concat(s.pts);
+      });
     });
   });
-  return { type: 'FeatureCollection', features: feats.concat(buildLinks()) };
 }
-function buildSel(which) {   // the selected sector, drawn by the overlay stack
+let LASTCHAINS = null;
+function buildFamilies() {
+  const pairs = junctionPairs();
+  const centreSlices = [], bandSlices = [], edgeSlices = [];
+  names.forEach(n => {
+    const g = GEO[n];
+    g.cuts.forEach((ab, idx) => {
+      const bits = pieces[n][idx];
+      const cPts = g.stitched.slice(ab[0], ab[1] + 1);
+      if (bits === 3) bandSlices.push({ pts: cPts, key: 'band', mem: [{ n, idx }], e0: null, e1: null });
+      else centreSlices.push({ pts: cPts, key: mute(colOf(n, bits)), mem: [{ n, idx }], e0: null, e1: null });
+      if (bits !== 3) [0, 1].forEach(side => {
+        if (bits & (1 << side)) {
+          const off = side === 0 ? g.off0 : g.off1;
+          edgeSlices.push({ pts: off.slice(ab[0], ab[1] + 1), key: 'edge', mem: [{ n, idx, side }], e0: { n, vi: ab[0], side }, e1: { n, vi: ab[1], side } });
+        }
+      });
+    });
+  });
+  const centres = mergeStrands(centreSlices, null);
+  const bands = mergeStrands(bandSlices, null);
+  const edges = mergeStrands(edgeSlices, pairs);
+  extendIntoBands(edges, pairs);
+  LASTCHAINS = { centres, bands, edges };
+  const fc = (list, colFn) => ({ type: 'FeatureCollection', features: list.map(sl => ({ type: 'Feature', properties: { col: colFn(sl) }, geometry: { type: 'LineString', coordinates: GJ(sl.pts) } })) });
+  return { centres: fc(centres, sl => sl.key), bands: fc(bands, () => MUGREEN), edges: fc(edges, () => MUGREEN) };
+}
+function buildSel(which) {   // the selected sector's side lines (vibrant)
   const feats = [];
   if (sel) {
     const g = GEO[sel.name], ab = g.cuts[sel.idx], bits = pieces[sel.name][sel.idx];
-    if (which === 'c') feats.push({ type: 'Feature', properties: { col: colOf(sel.name, bits) }, geometry: { type: 'LineString', coordinates: GJ(g.stitched.slice(ab[0], ab[1] + 1)) } });
-    else [g.off0, g.off1].forEach((off, side) => { if (bits & (1 << side)) feats.push({ type: 'Feature', properties: { col: GREEN }, geometry: { type: 'LineString', coordinates: GJ(off.slice(ab[0], ab[1] + 1)) } }); });
+    if (which === 'e' && bits !== 3) [g.off0, g.off1].forEach((off, side) => { if (bits & (1 << side)) feats.push({ type: 'Feature', properties: { col: GREEN }, geometry: { type: 'LineString', coordinates: GJ(off.slice(ab[0], ab[1] + 1)) } }); });
   }
   return { type: 'FeatureCollection', features: feats };
 }
+function buildSelC() {   // the selected sector's core: a vibrant BAND when complete, a vibrant core otherwise
+  const none = { type: 'FeatureCollection', features: [] };
+  if (!sel) return { sel: none, selBand: none };
+  const g = GEO[sel.name], ab = g.cuts[sel.idx], bits = pieces[sel.name][sel.idx];
+  const f = { type: 'Feature', properties: { col: colOf(sel.name, bits) }, geometry: { type: 'LineString', coordinates: GJ(g.stitched.slice(ab[0], ab[1] + 1)) } };
+  const one = { type: 'FeatureCollection', features: [f] };
+  return bits === 3 ? { sel: none, selBand: one } : { sel: one, selBand: none };
+}
 const HIT = { type: 'FeatureCollection', features: names.flatMap(n => GEO[n].cuts.map((ab, i) => ({ type: 'Feature', properties: { name: n, idx: i }, geometry: { type: 'LineString', coordinates: GJ(GEO[n].stitched.slice(ab[0], ab[1] + 1)) } }))) };
 let CUR = null;
-function rebuildData() { CUR = { centres: buildCentres(), edges: buildEdges(), sel: buildSel('c'), selEdges: buildSel('e') }; }
+function rebuildData() { const F = buildFamilies(); const SC = buildSelC(); CUR = { centres: F.centres, bands: F.bands, edges: F.edges, sel: SC.sel, selBand: SC.selBand, selEdges: buildSel('e') }; }
 
 function applyMixed() {
   pieces = freshPieces();
@@ -445,6 +504,9 @@ rebuildData();
 // ================= map & treatments =================
 const STYLES = { day: 'https://tiles.openfreemap.org/styles/positron', night: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json' };
 const surfW = ['interpolate', ['linear'], ['zoom'], 14, 2.5, 16, 6.5, 17, 9.5, 18, 15, 19, 24];
+const BANDW = ['interpolate', ['linear'], ['zoom'], 15, 3, 16, 6, 17, 11, 18, 22, 19, 44];       // ~9.6 m of road width, tracking the geographic side offsets
+const BANDGLOW = ['interpolate', ['linear'], ['zoom'], 15, 10, 16, 14, 17, 20, 18, 32, 19, 56];
+const BANDCASE = ['interpolate', ['linear'], ['zoom'], 15, 5.5, 16, 9, 17, 15, 18, 27, 19, 50];
 let map = null, treatment = 1, baseMode = 'day', fontStack = ['Noto Sans Regular'];
 
 function firstSymbolId() {
@@ -455,35 +517,46 @@ function firstSymbolId() {
 function addStack() {
   if (!map.getSource('centres')) {
     map.addSource('centres', { type: 'geojson', data: CUR.centres });
+    map.addSource('bands', { type: 'geojson', data: CUR.bands });
     map.addSource('edges', { type: 'geojson', data: CUR.edges });
     map.addSource('sel', { type: 'geojson', data: CUR.sel });
+    map.addSource('selBand', { type: 'geojson', data: CUR.selBand });
     map.addSource('selEdges', { type: 'geojson', data: CUR.selEdges });
     map.addSource('hit', { type: 'geojson', data: HIT });
     map.addSource('labels', { type: 'geojson', data: LABELS });
   }
   const before = firstSymbolId();
   const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer, before); };
-  const line = (id, source, paint, layout, filter) => { const o = { id, type: 'line', source, layout: Object.assign({ 'line-cap': 'round', 'line-join': 'round' }, layout || {}), paint }; if (filter) o.filter = filter; return o; };   // NOTE: a present-but-undefined `filter` key makes MapLibre silently drop the layer (found by the QA tour, 2026-10-28)
+  const line = (id, source, paint, layout, filter) => { const o = { id, type: 'line', source, layout: Object.assign({ 'line-cap': 'round', 'line-join': 'miter' }, layout || {}), paint }; if (filter) o.filter = filter; return o; };   // NOTE: a present-but-undefined `filter` key makes MapLibre silently drop the layer (found by the QA tour, 2026-10-28)
   // --- T0: the current tracker look, reproduced in GL (the control) ---
   add(line('t0-centre', 'centres', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 0.9 }));
+  add(line('t0-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.9 }));
   add(line('t0-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 0.9 }));
   // --- T1: integrated — the road surface itself carries the state ---
   add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': baseMode === 'night' ? 0.55 : 0.4 }));
+  add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': baseMode === 'night' ? 0.55 : 0.4 }));
   add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 0.92 }));
+  add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.92 }));
   add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 0.95 }));
   // --- T2: glow accent — basemap roads untouched, light instead of paint ---
   add(line('t2-glow', 'centres', { 'line-color': ['get', 'col'], 'line-width': 13, 'line-opacity': 0.3, 'line-blur': 8 }));
   add(line('t2-core', 'centres', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 0.95 }));
+  add(line('t2-bandglow', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDGLOW, 'line-opacity': 0.3, 'line-blur': 8 }));
+  add(line('t2-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.95 }));
   add(line('t2-edgeglow', 'edges', { 'line-color': ['get', 'col'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 0.5 }));
   add(line('t2-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 0.95 }));
   // --- selection overlay: the base spec redrawn in the VIBRANT colour -
   // identical widths and glow, so the only difference is the colour pop ---
   add(line('t0-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 0.9 }));
+  add(line('t0-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.9 }));
   add(line('t0-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 0.9 }));
   add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 0.92 }));
+  add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.92 }));
   add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 0.95 }));
   add(line('t2-selglow', 'sel', { 'line-color': ['get', 'col'], 'line-width': 13, 'line-blur': 8, 'line-opacity': 0.3 }));
   add(line('t2-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 0.95 }));
+  add(line('t2-selbandglow', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDGLOW, 'line-blur': 8, 'line-opacity': 0.3 }));
+  add(line('t2-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.95 }));
   add(line('t2-seleglow', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 0.5 }));
   add(line('t2-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 0.95 }));
   // --- hit + labels (every treatment) ---
@@ -507,8 +580,10 @@ function applyStates() {
   rebuildData();
   if (map && map.getSource('centres')) {
     map.getSource('centres').setData(CUR.centres);
+    map.getSource('bands').setData(CUR.bands);
     map.getSource('edges').setData(CUR.edges);
     map.getSource('sel').setData(CUR.sel);
+    map.getSource('selBand').setData(CUR.selBand);
     map.getSource('selEdges').setData(CUR.selEdges);
   }
   renderStatus();
@@ -517,7 +592,7 @@ function streetDone(n) { return pieces[n].every(b => b === 3); }
 function renderStatus() {
   const el = document.getElementById('status');
   const a = document.getElementById('sideA'), b = document.getElementById('sideB'), sd = document.getElementById('streetDone'), sr = document.getElementById('streetReset');
-  if (!sel) { el.textContent = 'Tap a street on the map.'; a.disabled = b.disabled = sd.disabled = sr.disabled = true; return; }
+  if (!sel) { el.textContent = 'Tap a street to select it · tap empty map to deselect.'; a.disabled = b.disabled = sd.disabled = sr.disabled = true; return; }
   const bits = pieces[sel.name][sel.idx], total = pieces[sel.name].length;
   const lb = LEFTBIT[sel.name], rb = 1 - lb;
   const sideTxt = v => v ? 'done ✓' : 'not done';
@@ -555,6 +630,7 @@ function init() {
   map.on('click', e => {
     const fs = map.queryRenderedFeatures(e.point, { layers: ['hit'] });
     if (fs && fs.length) { sel = { name: fs[0].properties.name, idx: fs[0].properties.idx }; applyStates(); }
+    else if (sel) { sel = null; applyStates(); }   // tap anywhere else deselects, like the tracker
   });
 }
 document.querySelectorAll('[data-treat]').forEach(b => b.addEventListener('click', () => setTreatment(+b.dataset.treat)));
@@ -593,6 +669,9 @@ document.getElementById('sideA').addEventListener('click', () => { if (sel) togg
 document.getElementById('sideB').addEventListener('click', () => { if (sel) toggleSide(1 << (1 - LEFTBIT[sel.name])); });
 document.getElementById('streetDone').addEventListener('click', () => { if (!sel) return; pieces[sel.name] = pieces[sel.name].map(() => 3); applyStates(); });
 document.getElementById('streetReset').addEventListener('click', () => { if (!sel) return; pieces[sel.name] = pieces[sel.name].map(() => 0); applyStates(); });
+document.getElementById('titleX').addEventListener('click', () => { document.getElementById('title').style.display = 'none'; });
+document.getElementById('panelHide').addEventListener('click', () => { document.getElementById('panel').style.display = 'none'; document.getElementById('panelShow').style.display = 'block'; });
+document.getElementById('panelShow').addEventListener('click', () => { document.getElementById('panel').style.display = 'block'; document.getElementById('panelShow').style.display = 'none'; });
 init();
 </script>
 </body>
