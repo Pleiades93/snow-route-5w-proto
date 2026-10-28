@@ -464,14 +464,14 @@ function buildFamilies() {
   const edges = mergeStrands(edgeSlices, pairs);
   extendIntoBands(edges, pairs);
   LASTCHAINS = { centres, bands, edges };
-  const fc = (list, colFn) => ({ type: 'FeatureCollection', features: list.map(sl => ({ type: 'Feature', properties: { col: colFn(sl) }, geometry: { type: 'LineString', coordinates: GJ(sl.pts) } })) });
+  const fc = (list, colFn) => ({ type: 'FeatureCollection', features: list.map(sl => { const c = colFn(sl); return { type: 'Feature', properties: { col: c, colG: mute(c) }, geometry: { type: 'LineString', coordinates: GJ(sl.pts) } }; }) });
   return { centres: fc(centres, sl => sl.key), bands: fc(bands, () => MUGREEN), edges: fc(edges, () => MUGREEN) };
 }
 function buildSel(which) {   // the selected sector's side lines (vibrant)
   const feats = [];
   if (sel) {
     const g = GEO[sel.name], ab = g.cuts[sel.idx], bits = pieces[sel.name][sel.idx];
-    if (which === 'e' && bits !== 3) [g.off0, g.off1].forEach((off, side) => { if (bits & (1 << side)) feats.push({ type: 'Feature', properties: { col: GREEN }, geometry: { type: 'LineString', coordinates: GJ(off.slice(ab[0], ab[1] + 1)) } }); });
+    if (which === 'e' && bits !== 3) [g.off0, g.off1].forEach((off, side) => { if (bits & (1 << side)) feats.push({ type: 'Feature', properties: { col: GREEN, colG: mute(GREEN) }, geometry: { type: 'LineString', coordinates: GJ(off.slice(ab[0], ab[1] + 1)) } }); });
   }
   return { type: 'FeatureCollection', features: feats };
 }
@@ -479,7 +479,7 @@ function buildSelC() {   // the selected sector's core: a vibrant BAND when comp
   const none = { type: 'FeatureCollection', features: [] };
   if (!sel) return { sel: none, selBand: none };
   const g = GEO[sel.name], ab = g.cuts[sel.idx], bits = pieces[sel.name][sel.idx];
-  const f = { type: 'Feature', properties: { col: colOf(sel.name, bits) }, geometry: { type: 'LineString', coordinates: GJ(g.stitched.slice(ab[0], ab[1] + 1)) } };
+  const f = { type: 'Feature', properties: { col: colOf(sel.name, bits), colG: mute(colOf(sel.name, bits)) }, geometry: { type: 'LineString', coordinates: GJ(g.stitched.slice(ab[0], ab[1] + 1)) } };
   const one = { type: 'FeatureCollection', features: [f] };
   return bits === 3 ? { sel: none, selBand: one } : { sel: one, selBand: none };
 }
@@ -529,36 +529,36 @@ function addStack() {
   const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer, before); };
   const line = (id, source, paint, layout, filter) => { const o = { id, type: 'line', source, layout: Object.assign({ 'line-cap': 'round', 'line-join': 'miter' }, layout || {}), paint }; if (filter) o.filter = filter; return o; };   // NOTE: a present-but-undefined `filter` key makes MapLibre silently drop the layer (found by the QA tour, 2026-10-28)
   // --- T0: the current tracker look, reproduced in GL (the control) ---
-  add(line('t0-centre', 'centres', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 0.9 }));
-  add(line('t0-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.9 }));
-  add(line('t0-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 0.9 }));
+  add(line('t0-centre', 'centres', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 1 }));
+  add(line('t0-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
+  add(line('t0-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 1 }));
   // --- T1: integrated — the road surface itself carries the state ---
-  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': baseMode === 'night' ? 0.55 : 0.4 }));
-  add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': baseMode === 'night' ? 0.55 : 0.4 }));
-  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 0.92 }));
-  add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.92 }));
-  add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 0.95 }));
+  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': 1 }));
+  add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': 1 }));
+  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }));
+  add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
+  add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }));
   // --- T2: glow accent — basemap roads untouched, light instead of paint ---
-  add(line('t2-glow', 'centres', { 'line-color': ['get', 'col'], 'line-width': 13, 'line-opacity': 0.3, 'line-blur': 8 }));
-  add(line('t2-core', 'centres', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 0.95 }));
-  add(line('t2-bandglow', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDGLOW, 'line-opacity': 0.3, 'line-blur': 8 }));
-  add(line('t2-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.95 }));
-  add(line('t2-edgeglow', 'edges', { 'line-color': ['get', 'col'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 0.5 }));
-  add(line('t2-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 0.95 }));
+  add(line('t2-glow', 'centres', { 'line-color': ['get', 'colG'], 'line-width': 13, 'line-opacity': 1, 'line-blur': 8 }));
+  add(line('t2-core', 'centres', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 1 }));
+  add(line('t2-bandglow', 'bands', { 'line-color': ['get', 'colG'], 'line-width': BANDGLOW, 'line-opacity': 1, 'line-blur': 8 }));
+  add(line('t2-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
+  add(line('t2-edgeglow', 'edges', { 'line-color': ['get', 'colG'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 1 }));
+  add(line('t2-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 1 }));
   // --- selection overlay: the base spec redrawn in the VIBRANT colour -
   // identical widths and glow, so the only difference is the colour pop ---
-  add(line('t0-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 0.9 }));
-  add(line('t0-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.9 }));
-  add(line('t0-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 0.9 }));
-  add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 0.92 }));
-  add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.92 }));
-  add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 0.95 }));
-  add(line('t2-selglow', 'sel', { 'line-color': ['get', 'col'], 'line-width': 13, 'line-blur': 8, 'line-opacity': 0.3 }));
-  add(line('t2-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 0.95 }));
-  add(line('t2-selbandglow', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDGLOW, 'line-blur': 8, 'line-opacity': 0.3 }));
-  add(line('t2-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 0.95 }));
-  add(line('t2-seleglow', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 0.5 }));
-  add(line('t2-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 0.95 }));
+  add(line('t0-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 1 }));
+  add(line('t0-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
+  add(line('t0-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 1 }));
+  add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }));
+  add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
+  add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }));
+  add(line('t2-selglow', 'sel', { 'line-color': ['get', 'colG'], 'line-width': 13, 'line-blur': 8, 'line-opacity': 1 }));
+  add(line('t2-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 1 }));
+  add(line('t2-selbandglow', 'selBand', { 'line-color': ['get', 'colG'], 'line-width': BANDGLOW, 'line-blur': 8, 'line-opacity': 1 }));
+  add(line('t2-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
+  add(line('t2-seleglow', 'selEdges', { 'line-color': ['get', 'colG'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 1 }));
+  add(line('t2-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 1 }));
   // --- hit + labels (every treatment) ---
   add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
