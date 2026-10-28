@@ -232,6 +232,9 @@ const STRETCH = {};
 // derived from them.
 let pieces = {}, pieceTimes = {};
 function segLenM(pts) { let L = 0; for (let i = 1; i < pts.length; i++) L += jDistM(pts[i - 1], pts[i]); return L; }
+// ================= prototype state & geometry =================
+// State mirrors the app: pieces[name][stretchIdx] in 0..3 (bit 0 = side A,
+// the LEFT of the stitched line's direction; bit 1 = side B).
 
 // ================= prototype state & geometry =================
 // State mirrors the app: pieces[name][stretchIdx] in 0..3 (bit 0 = side A,
@@ -365,6 +368,65 @@ function buildJunctions() {
     }));
   });
 }
+let SVMAP = null;
+function sharedVertexMap() {
+  if (SVMAP) return SVMAP;
+  SVMAP = {};
+  names.forEach(n => GEO[n].stitched.forEach((pt, vi) => { const k = coordKey(pt); (SVMAP[k] = SVMAP[k] || []).push({ n, vi }); }));
+  return SVMAP;
+}
+// ---- through-connection (Andrew, 2026-10-28, round 9): "they all have
+// to connect... no matter which way it goes." A side line marked on BOTH
+// arms of a junction runs THROUGH it - unless a marked line of another
+// street occupies one of its corners there, in which case it kerb-clips
+// and the other street runs through (first claim wins, by street order),
+// its arms touching the through line at the corner. Each junction
+// quadrant is claimed by at most one through line, so two green lines
+// still never cross; every arm ends joined to something beside it.
+let THROUGH_SEGS = [];
+function throughOK(A, side, J, runPts) {
+  if (J.sin <= 0.42) return false;
+  const V = J.V, vKey = coordKey(V);
+  const back = (JUNC[J.B] || []).find(x => x.B === A && coordKey(x.V) === vKey);
+  if (!back) return false;
+  const nA = back.nB, nB = J.nB, Vx = XYOf(V);
+  const off = (side === 0 ? GEO[A].off0 : GEO[A].off1)[J.viA];
+  const sideSign = Math.sign((XYOf(off)[0] - Vx[0]) * nA[0] + (XYOf(off)[1] - Vx[1]) * nA[1]);
+  if (!sideSign) return false;
+  const signsOf = pt => { const w = XYOf(pt); return [Math.sign((w[0] - Vx[0]) * nA[0] + (w[1] - Vx[1]) * nA[1]), Math.sign((w[0] - Vx[0]) * nB[0] + (w[1] - Vx[1]) * nB[1])]; };
+  // blocked by any other street's marked side arm on A's side half at V?
+  const map = sharedVertexMap();
+  let blocked = false;
+  for (const E of (map[vKey] || [])) {
+    if (E.n === A || blocked) continue;
+    const gD = GEO[E.n];
+    [0, 1].forEach(t => {
+      if (blocked) return;
+      gD.cuts.forEach((ab, ci) => {
+        if (blocked || !(E.vi >= ab[0] && E.vi <= ab[1])) return;
+        const bits = pieces[E.n][ci];
+        if (bits === 3 || !(bits & (1 << t))) return;
+        const idx2 = ab[0] === E.vi ? Math.min(ab[1], E.vi + 1) : Math.max(ab[0], E.vi - 1);
+        const pt = (t === 0 ? gD.off0 : gD.off1)[idx2];
+        if (signsOf(pt)[0] === sideSign) blocked = true;
+      });
+    });
+  }
+  if (blocked) return false;
+  for (const seg of THROUGH_SEGS) {
+    if (coordKey(seg.V) !== vKey) continue;
+    // The same street+side asking again is the SAME line, not a rival:
+    // where the crossing road changes name mid-junction (Fifth becomes
+    // Angie at Valeria) or a junction sits on a double vertex (Mellings
+    // on Velmar), the junction has one entry per name/vertex and the
+    // first grant must not block the rest. (Round 9: Valeria's lone line
+    // ran through the Greenpark T but stopped at Fifth/Angie.)
+    if (seg.A === A && seg.side === side) continue;
+    if (seg.pts.some(pt => signsOf(pt)[0] === sideSign)) return false;
+  }
+  THROUGH_SEGS.push({ V, A, side, pts: runPts.filter(pt => jDistM(pt, V) < CORRIDOR + 5) });
+  return true;
+}
 // Cut one piece at one junction: the part inside the crossing street's
 // corridor (within CORRIDOR metres of its centreline, near the junction)
 // is removed; the cut ends land exactly on the corridor boundary and are
@@ -373,15 +435,33 @@ function clipOne(pc, J, R) {
   const Vx = XYOf(J.V), L = R / Math.max(J.sin, 0.42) + 9;
   const W = p => { const q = XYOf(p); return (q[0] - Vx[0]) * J.nB[0] + (q[1] - Vx[1]) * J.nB[1]; };
   const U = p => { const q = XYOf(p); return (q[0] - Vx[0]) * J.dB[0] + (q[1] - Vx[1]) * J.dB[1]; };
-  const inside = p => Math.abs(W(p)) < R - 1e-9 && Math.abs(U(p)) < L;
+  // The 1e-6 margin is load-bearing: XYOf coordinates are ~1e6-1e7 in
+  // magnitude (degrees x ~1e5), so the W/U of an interpolated boundary
+  // crossing carries ~1e-8 of float cancellation noise. At 1e-9 the
+  // crossing point - ON the wall by construction - randomly classified
+  // as INSIDE, the outside piece lost its first point, and a 1-point
+  // remnant was filtered out (Velmar stretch 6 again, round 9).
+  const inside = p => Math.abs(W(p)) < R - 1e-6 && Math.abs(U(p)) < L - 1e-6;
   const aug = [pc.pts[0]];
   for (let i = 0; i + 1 < pc.pts.length; i++) {
-    const p = pc.pts[i], q = pc.pts[i + 1], wp = W(p), wq = W(q), cr = [];
+    const p = pc.pts[i], q = pc.pts[i + 1], wp = W(p), wq = W(q), up = U(p), uq = U(q), cr = [];
     [R, -R].forEach(sv => {
       if ((wp - sv) * (wq - sv) < 0) {
         const t = (sv - wp) / (wq - wp);
         const c = [p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])];
         if (Math.abs(U(c)) < L) cr.push({ t, c });
+      }
+    });
+    // The box has FOUR walls: a segment can also leave through the end
+    // walls (U = +/-L). Round 9: those crossings were never inserted, so
+    // a sparse segment exiting through a corner lost everything from the
+    // box to its next trace point - Velmar stretch 6 (one 104 m segment)
+    // lost its whole piece and rendered as a 100 m gap.
+    [L, -L].forEach(sv => {
+      if ((up - sv) * (uq - sv) < 0) {
+        const t = (sv - up) / (uq - up);
+        const c = [p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])];
+        if (Math.abs(W(c)) < R) cr.push({ t, c });
       }
     });
     cr.sort((x, y) => x.t - y.t).forEach(({ c }) => { if (coordKey(c) !== coordKey(aug[aug.length - 1])) aug.push(c); });
@@ -399,10 +479,14 @@ function clipOne(pc, J, R) {
   if (cur) { cur.eTag = pc.eTag; res.push(cur); }
   return res;
 }
-function clipPieces(piecesIn, A, R = CORRIDOR) {
+function clipPieces(piecesIn, A, R = CORRIDOR, skip = null) {
   if (!JUNC) buildJunctions();
   let pieces = piecesIn;
+  const seenCluster = [];
   for (const J of JUNC[A]) {
+    if (seenCluster.some(u => u.B === J.B && jDistM(u.V, J.V) < 2)) continue;   // double vertices at one crossing clip ONCE (round 9: re-clips re-tagged ends and broke pair matching)
+    seenCluster.push(J);
+    if (skip && [...skip].some(u => u.B === J.B && jDistM(u.V, J.V) < 2)) continue;
     if (J.sin <= 0.42) continue;   // near-parallel traces run together (overlaps) - not crossings
     const out = [];
     for (const pc of pieces) out.push(...clipOne(pc, J, R));
@@ -422,8 +506,52 @@ function edgeRunSlices(n, side, marked) {
     if (!run) return;
     const startMeta = { n, vi: g.cuts[run.firstIdx][0], side }, endMeta = { n, vi: g.cuts[run.lastIdx][1], side };
     const mem = []; for (let i = run.firstIdx; i <= run.lastIdx; i++) mem.push({ n, idx: i, side });
-    let clipped = clipPieces([{ pts: run.pts, sTag: null, eTag: null }], n);
-    if (!clipped.length) clipped = clipPieces([{ pts: run.pts, sTag: null, eTag: null }], n, 3.4);
+    if (!JUNC) buildJunctions();
+    const skip = new Set();
+    const seenJ = [];
+    for (const J of JUNC[n]) {
+      if (J.sin <= 0.42) continue;
+      if (seenJ.some(u => u.B === J.B && jDistM(u.V, J.V) < 2)) continue;
+      seenJ.push(J);
+      if (!run.pts.some(pt => jDistM(pt, J.V) < CORRIDOR + 5)) continue;   // the run does not reach this junction
+      if (throughOK(n, side, J, run.pts)) { skip.add(J); continue; }
+      // own-street band across the mouth: the stretch on the other arm of
+      // THIS street at this junction is complete - its solid band fills
+      // the junction, so this side line runs unclipped to the vertex and
+      // lands inside the band - provided no other street has a marked
+      // side line here it could poke across.
+      const otherArmBand = GEO[n].cuts.some((ab, ci) => (ab[0] === J.viA || ab[1] === J.viA) && (ci < run.firstIdx || ci > run.lastIdx) && pieces[n][ci] === 3);
+      if (otherArmBand) {
+        // Skip the clip only if following this line unclipped to the
+        // vertex properly crosses NO other street's marked side line.
+        // (Round 9 refinement: the first version refused whenever ANY
+        // other street had marks at the junction - too coarse: at
+        // Velmar x Flushing the line reaches the band without crossing
+        // Flushing's line at all, and the refusal left it shy.)
+        let crosses = false;
+        const properX = (a, b, c, d) => { if (!segCross(a, b, c, d)) return false; const X = lineHit(a, b, c, d); return !!X && [a, b, c, d].every(pt => jDistM(X, pt) >= 0.35); };
+        for (let si = 0; si + 1 < run.pts.length && !crosses; si++) {
+          if (ptSegM(J.V, run.pts[si], run.pts[si + 1]) > CORRIDOR + 6) continue;
+          for (const dn of names) {
+            if (dn === n || crosses) break;
+            const gd = GEO[dn];
+            for (const t of [0, 1]) {
+              const marked = gd.cuts.some((ab, ci) => pieces[dn][ci] !== 3 && (pieces[dn][ci] & (1 << t)) && ab.some(v => jDistM(gd.stitched[v], J.V) < 16));
+              if (!marked) continue;
+              const off = t === 0 ? gd.off0 : gd.off1;
+              for (let oi = 0; oi + 1 < off.length; oi++) {
+                if (ptSegM(J.V, off[oi], off[oi + 1]) > 14) continue;
+                if (properX(run.pts[si], run.pts[si + 1], off[oi], off[oi + 1])) { crosses = true; break; }
+              }
+              if (crosses) break;
+            }
+          }
+        }
+        if (!crosses) skip.add(J);
+      }
+    }
+    let clipped = clipPieces([{ pts: run.pts, sTag: null, eTag: null }], n, CORRIDOR, skip);
+    if (!clipped.length) clipped = clipPieces([{ pts: run.pts, sTag: null, eTag: null }], n, 3.4, skip);
     clipped.forEach(pc => {
       out.push({ pts: pc.pts, key: 'edge', mem, e0: pc.sTag ? { n, vi: pc.sTag.vi, side } : startMeta, e1: pc.eTag ? { n, vi: pc.eTag.vi, side } : endMeta });
     });
@@ -442,6 +570,72 @@ function edgeRunSlices(n, side, marked) {
 // Junction pairing: at every shared vertex, which marked side continues
 // into which around their shared corner. A pair survives only when the
 // corner path crosses no centreline segment near the junction.
+// The TRUE corner of two side lines at a junction: the intersection of
+// the two offset POLYLINES (both arms, segments near V), required to lie
+// ON both segments. The round-4..8 corner used the intersection of two
+// single segments' infinite lines, which at bending or slanted junctions
+// lands off both lines (even on the far side of a centreline) - bridges
+// built on it were then vetoed, leaving shy ends (gate12 evidence).
+function polyCorner(n1, side1, n2, side2, V, vi1, vi2) {
+  const o1 = side1 === 0 ? GEO[n1].off0 : GEO[n1].off1, o2 = side2 === 0 ? GEO[n2].off0 : GEO[n2].off1;
+  const segsOf = (off, vi) => {
+    const segs = [];
+    for (let i = 0; i + 1 < off.length; i++) segs.push({ seg: [off[i], off[i + 1]], ext: false });
+    if (vi === 0 && off.length > 1) { const d = [off[0][0] - off[1][0], off[0][1] - off[1][1]], L = jDistM(off[0], off[1]) || 1; segs.push({ seg: [[off[0][0] + d[0] * 8 / L, off[0][1] + d[1] * 8 / L], off[0]], ext: true }); }
+    if (vi === off.length - 1 && off.length > 1) { const e = off[off.length - 1], q = off[off.length - 2], d = [e[0] - q[0], e[1] - q[1]], L = jDistM(q, e) || 1; segs.push({ seg: [e, [e[0] + d[0] * 8 / L, e[1] + d[1] * 8 / L]], ext: true }); }
+    return segs;
+  };
+  // an extension-derived corner is valid only if the leg from the
+  // terminating line's end point to the corner stays on its own side of
+  // the OTHER street's centreline (round 9: the unguarded extension let
+  // Angie's line reach across Valeria to the far corner and paired
+  // Valeria's east arm with Angie across the junction)
+  const legCrosses = (endPt, X, otherN) => {
+    const st = GEO[otherN].stitched;
+    for (let si = 0; si + 1 < st.length; si++) if (ptSegM(V, st[si], st[si + 1]) < 13 && segCross(endPt, X, st[si], st[si + 1])) return true;
+    return false;
+  };
+  let best = null, bd = 1e9;
+  for (const s1 of segsOf(o1, vi1)) {
+    if (ptSegM(V, s1.seg[0], s1.seg[1]) > 12) continue;
+    for (const s2 of segsOf(o2, vi2)) {
+      if (ptSegM(V, s2.seg[0], s2.seg[1]) > 12) continue;
+      const X = lineHit(s1.seg[0], s1.seg[1], s2.seg[0], s2.seg[1]);
+      if (!X) continue;
+      if (ptSegM(X, s1.seg[0], s1.seg[1]) > 0.35 || ptSegM(X, s2.seg[0], s2.seg[1]) > 0.35) continue;
+      if (s1.ext && legCrosses(o1[vi1], X, n2)) continue;
+      if (s2.ext && legCrosses(o2[vi2], X, n1)) continue;
+      const d = jDistM(X, V); if (d < bd) { bd = d; best = X; }
+    }
+  }
+  return best;
+}
+// A bridge path must not cross a MARKED side line either (gate12 found a
+// bridge hopping over a third line at the Velmar x Flatbush cluster). The
+// two lines being joined are excluded (the legs run along them), and a
+// touch AT the bridge's own corner point is the join itself, not a cross.
+function pathBadGreen(pts, J, excl, cornerPt) {
+  for (const n2 of names) {
+    const g2 = GEO[n2];
+    for (const t of [0, 1]) {
+      if (excl.has(n2 + '|' + t)) continue;
+      const marked = g2.cuts.some((ab, ci) => pieces[n2][ci] !== 3 && (pieces[n2][ci] & (1 << t)) && ab.some(v => jDistM(g2.stitched[v], J) < 16));
+      if (!marked) continue;
+      const off = t === 0 ? g2.off0 : g2.off1;
+      for (let si = 0; si + 1 < off.length; si++) {
+        if (ptSegM(J, off[si], off[si + 1]) > 14) continue;
+        for (let s2 = 0; s2 + 1 < pts.length; s2++) {
+          if (!segCross(pts[s2], pts[s2 + 1], off[si], off[si + 1])) continue;
+          const X = lineHit(pts[s2], pts[s2 + 1], off[si], off[si + 1]);
+          if (!X) return true;
+          if (cornerPt && jDistM(X, cornerPt) < 1.2) continue;
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 function junctionPairs() {
   const at = {};
   names.forEach(n => GEO[n].stitched.forEach((pt, vi) => { const k = coordKey(pt); (at[k] = at[k] || []).push({ n, vi }); }));
@@ -466,13 +660,18 @@ function junctionPairs() {
       if (A.n === B.n) continue;
       if (jDistM(A.pt, B.pt) > 9.5) continue;
       const J = GEO[A.n].stitched[A.vi];
-      const ext = C => { const off = C.side === 0 ? GEO[C.n].off0 : GEO[C.n].off1; return C.vi > 0 ? [off[C.vi - 1], off[C.vi]] : [off[C.vi], off[C.vi + 1]]; };
-      const ea = ext(A), eb = ext(B);
-      const hitP = lineHit(ea[0], ea[1], eb[0], eb[1]);
+      const hitP = polyCorner(A.n, A.side, B.n, B.side, J, A.vi, B.vi);
       const pathBad = pts => {
-        for (let s2 = 0; s2 + 1 < pts.length; s2++) for (const n2 of names) {
-          const st = GEO[n2].stitched;
-          for (let si = 0; si + 1 < st.length; si++) if (ptSegM(J, st[si], st[si + 1]) < 13 && segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) return true;
+        for (let s2 = 0; s2 + 1 < pts.length; s2++) {
+          if (ptSegM(J, pts[s2], pts[s2 + 1]) < 1.5) return true;   // through the junction's middle = a mouth cut
+          for (const n2 of names) {
+            const st = GEO[n2].stitched;
+            for (let si = 0; si + 1 < st.length; si++) {
+              if (ptSegM(J, st[si], st[si + 1]) >= 13 || !segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) continue;
+              const X = lineHit(pts[s2], pts[s2 + 1], st[si], st[si + 1]);
+              if (!X || jDistM(X, J) > 6) return true;   // corner-blob crossings sit at the offset distance (~3.3 m); far crossings are excursions
+            }
+          }
         }
         return false;
       };
@@ -491,9 +690,16 @@ function junctionPairs() {
 function mergeStrands(slices, pairs) {
   const rev = sl => ({ pts: [...sl.pts].reverse(), key: sl.key, mem: sl.mem, e0: sl.e1, e1: sl.e0 });
   const pathBadNear = (pts, J) => {
-    for (let s2 = 0; s2 + 1 < pts.length; s2++) for (const n2 of names) {
-      const st = GEO[n2].stitched;
-      for (let si = 0; si + 1 < st.length; si++) if (ptSegM(J, st[si], st[si + 1]) < 13 && segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) return true;
+    for (let s2 = 0; s2 + 1 < pts.length; s2++) {
+      if (ptSegM(J, pts[s2], pts[s2 + 1]) < 1.5) return true;
+      for (const n2 of names) {
+        const st = GEO[n2].stitched;
+        for (let si = 0; si + 1 < st.length; si++) {
+          if (ptSegM(J, st[si], st[si + 1]) >= 13 || !segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) continue;
+          const X = lineHit(pts[s2], pts[s2 + 1], st[si], st[si + 1]);
+          if (!X || jDistM(X, J) > 6) return true;
+        }
+      }
     }
     return false;
   };
@@ -517,8 +723,9 @@ function mergeStrands(slices, pairs) {
           const aEnd = atEnd ? a.pts[a.pts.length - 1] : a.pts[0];
           const bStart = bo.pts[0];   // bo is oriented so its start carries the matching meta
           let bridge = null;
-          if (pr.corner && !pathBadNear([aEnd, pr.corner, bStart], J)) bridge = [pr.corner];
-          else if (!pathBadNear([aEnd, bStart], J)) bridge = [];
+          const exclG = new Set([meta.n + '|' + meta.side, pr.n2 + '|' + pr.side2]);
+          if (pr.corner && !pathBadNear([aEnd, pr.corner, bStart], J) && !pathBadGreen([aEnd, pr.corner, bStart], J, exclG, pr.corner)) bridge = [pr.corner];
+          else if (!pathBadNear([aEnd, bStart], J) && !pathBadGreen([aEnd, bStart], J, exclG, null)) bridge = [];
           if (!bridge) return;
           if (atEnd) out.push({ score: 1, merged: { pts: a.pts.concat(bridge, bo.pts), key: a.key, mem: a.mem.concat(bo.mem), e0: a.e0, e1: bo.e1 } });
           else out.push({ score: 1, merged: { pts: [...bo.pts].reverse().concat(bridge.slice().reverse(), a.pts), key: a.key, mem: bo.mem.concat(a.mem), e0: bo.e1, e1: a.e1 } });
@@ -548,13 +755,27 @@ function mergeStrands(slices, pairs) {
 // the same quadrant of that junction, within reach, are joined by the
 // first candidate path that crosses nothing - the side lines' own
 // corner, the corridor box corner, or the chord.
-function bridgeStragglers(chains) {
+function bridgeStragglers(chains, pairs) {
+  // Round 9 (Andrew: "verify every single corner"): candidacy is purely
+  // GEOMETRIC - any two chain ends within 10 m of the same junction point,
+  // from different streets, in the same quadrant, within 13 m of each
+  // other, get bridged. The round-8 pass keyed ends to the exact shared
+  // vertex in their metadata, which could miss corners where the two
+  // streets share several nearby vertices or a street ends just short of
+  // the junction point.
   if (!JUNC) buildJunctions();
   const revC = c => ({ pts: [...c.pts].reverse(), key: c.key, mem: c.mem, e0: c.e1, e1: c.e0 });
   const pathBadNear = (pts, J) => {
-    for (let s2 = 0; s2 + 1 < pts.length; s2++) for (const n2 of names) {
-      const st = GEO[n2].stitched;
-      for (let si = 0; si + 1 < st.length; si++) if (ptSegM(J, st[si], st[si + 1]) < 13 && segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) return true;
+    for (let s2 = 0; s2 + 1 < pts.length; s2++) {
+      if (ptSegM(J, pts[s2], pts[s2 + 1]) < 1.5) return true;
+      for (const n2 of names) {
+        const st = GEO[n2].stitched;
+        for (let si = 0; si + 1 < st.length; si++) {
+          if (ptSegM(J, st[si], st[si + 1]) >= 13 || !segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) continue;
+          const X = lineHit(pts[s2], pts[s2 + 1], st[si], st[si + 1]);
+          if (!X || jDistM(X, J) > 6) return true;
+        }
+      }
     }
     return false;
   };
@@ -564,49 +785,84 @@ function bridgeStragglers(chains) {
     return [dy / m / MLAT, dx / m / MLNG];
   };
   const pathLen = pts => { let L = 0; for (let i = 0; i + 1 < pts.length; i++) L += jDistM(pts[i], pts[i + 1]); return L; };
-  for (let iter = 0; iter < 80; iter++) {
+  const verts = Object.values(sharedVertexMap())
+    .filter(list => new Set(list.map(e => e.n)).size >= 2)
+    .map(list => GEO[list[0].n].stitched[list[0].vi]);
+  for (let iter = 0; iter < 120; iter++) {
     let merged = false;
     outer:
-    for (let i = 0; i < chains.length; i++) for (let j = 0; j < chains.length; j++) {
-      if (i === j) continue;
-      const endsI = [{ at: 'e0', pt: chains[i].pts[0], meta: chains[i].e0 }, { at: 'e1', pt: chains[i].pts[chains[i].pts.length - 1], meta: chains[i].e1 }];
-      const endsJ = [{ at: 'e0', pt: chains[j].pts[0], meta: chains[j].e0 }, { at: 'e1', pt: chains[j].pts[chains[j].pts.length - 1], meta: chains[j].e1 }];
-      for (const E1 of endsI) for (const E2 of endsJ) {
-        if (!E1.meta || !E2.meta || E1.meta.n === E2.meta.n) continue;
-        const V1 = GEO[E1.meta.n].stitched[E1.meta.vi], V2 = GEO[E2.meta.n].stitched[E2.meta.vi];
-        if (coordKey(V1) !== coordKey(V2)) continue;
-        const V = V1;
+    for (const V of verts) {
+      const near = [];
+      chains.forEach((c, ci) => {
+        [{ at: 'e0', pt: c.pts[0], meta: c.e0 }, { at: 'e1', pt: c.pts[c.pts.length - 1], meta: c.e1 }].forEach(E => {
+          if (E.meta && jDistM(E.pt, V) <= 10) near.push({ ci, ...E });
+        });
+      });
+      for (const E1 of near) for (const E2 of near) {
+        if (E1.ci === E2.ci || E1.meta.n === E2.meta.n) continue;
         if (jDistM(E1.pt, E2.pt) > 13) continue;
-        const J1 = (JUNC[E1.meta.n] || []).find(x => x.B === E2.meta.n && x.viA === E1.meta.vi);
-        const J2 = (JUNC[E2.meta.n] || []).find(x => x.B === E1.meta.n && x.viA === E2.meta.vi);
+        const J1 = (JUNC[E1.meta.n] || []).find(x => x.B === E2.meta.n && jDistM(x.V, V) < 2);
+        const J2 = (JUNC[E2.meta.n] || []).find(x => x.B === E1.meta.n && jDistM(x.V, V) < 2);
         if (!J1 || !J2) continue;
         const nA = J2.nB, nB = J1.nB, Vx = XYOf(V);
         const signs = pt => { const w = XYOf(pt); return [Math.sign((w[0] - Vx[0]) * nA[0] + (w[1] - Vx[1]) * nA[1]), Math.sign((w[0] - Vx[0]) * nB[0] + (w[1] - Vx[1]) * nB[1])]; };
         const s1 = signs(E1.pt), s2 = signs(E2.pt);
-        const sameQ = (s1[0] === 0 || s2[0] === 0 || s1[0] === s2[0]) && (s1[1] === 0 || s2[1] === 0 || s1[1] === s2[1]) && !(s1[0] !== 0 && s2[0] !== 0 && s1[0] !== s2[0]) && !(s1[1] !== 0 && s2[1] !== 0 && s1[1] !== s2[1]);
+        const sameQ = !(s1[0] !== 0 && s2[0] !== 0 && s1[0] !== s2[0]) && !(s1[1] !== 0 && s2[1] !== 0 && s1[1] !== s2[1]);
         if (!sameQ) continue;
         const dA = dirLL(E1.meta.n, E1.meta.vi), dB = dirLL(E2.meta.n, E2.meta.vi);
         const along = (pt, d) => [pt[0] + d[0], pt[1] + d[1]];
         const corner = lineHit(E1.pt, along(E1.pt, dA), E2.pt, along(E2.pt, dB));
         const box = lineHit(E1.pt, along(E1.pt, dB), E2.pt, along(E2.pt, dA));
+        // true corners first: the pairs corner (both lines' polylines),
+        // then this pair's own polyline intersection
+        let pairCorner = null;
+        if (pairs) (pairs[E1.meta.n + '|' + E1.meta.vi + '|' + E1.meta.side] || []).forEach(pr => { if (pr.n2 === E2.meta.n && pr.vi2 === E2.meta.vi && pr.side2 === E2.meta.side && pr.corner) pairCorner = pr.corner; });
+        const polyC = polyCorner(E1.meta.n, E1.meta.side, E2.meta.n, E2.meta.side, V, E1.meta.vi, E2.meta.vi);
         let bridge = null;
         if (jDistM(E1.pt, E2.pt) < 1.2) bridge = [];
-        else for (const cand of [corner ? [corner] : null, box ? [box] : null, []]) {
+        else for (const cand of [pairCorner ? [pairCorner] : null, polyC ? [polyC] : null, corner ? [corner] : null, box ? [box] : null, []]) {
           if (!cand) continue;
           const path = [E1.pt, ...cand, E2.pt];
-          if (pathLen(path) <= 15 && !pathBadNear(path, V)) { bridge = cand; break; }
+          const cap = cand.length ? 22 : 15;   // legs along the true lines run long at slanted junctions; the chord stays tight
+          const exclG = new Set([E1.meta.n + '|' + E1.meta.side, E2.meta.n + '|' + E2.meta.side]);
+          if (pathLen(path) <= cap && !pathBadNear(path, V) && !pathBadGreen(path, V, exclG, cand.length ? cand[0] : null)) { bridge = cand; break; }
         }
         if (!bridge) continue;
-        const ci = E1.at === 'e1' ? chains[i] : revC(chains[i]);
-        const cj = E2.at === 'e0' ? chains[j] : revC(chains[j]);
-        chains[i] = { pts: ci.pts.concat(bridge, cj.pts), key: ci.key, mem: ci.mem.concat(cj.mem), e0: ci.e0, e1: cj.e1 };
-        chains.splice(j, 1);
+        const ci2 = E1.at === 'e1' ? chains[E1.ci] : revC(chains[E1.ci]);
+        const cj2 = E2.at === 'e0' ? chains[E2.ci] : revC(chains[E2.ci]);
+        chains[E1.ci] = { pts: ci2.pts.concat(bridge, cj2.pts), key: ci2.key, mem: ci2.mem.concat(cj2.mem), e0: ci2.e0, e1: cj2.e1 };
+        chains.splice(E2.ci, 1);
         merged = true;
         break outer;
       }
     }
     if (!merged) break;
   }
+}
+// Round 9: when the partner street's side line RUNS THROUGH this junction
+// (throughOK), this street's clipped arm reaches the corner point - which
+// lies ON the through line - so the arm touches it instead of stopping
+// short (a T-join, not a crossing).
+function throughTouch(chains, pairs) {
+  chains.forEach(c => {
+    [['e1', true], ['e0', false]].forEach(([key, atEnd]) => {
+      const meta = c[key];
+      if (!meta) return;
+      (pairs[meta.n + '|' + meta.vi + '|' + meta.side] || []).forEach(pr => {
+        if (!pr.corner) return;
+        const endPt = atEnd ? c.pts[c.pts.length - 1] : c.pts[0];
+        if (jDistM(endPt, pr.corner) > 12 || coordKey(endPt) === coordKey(pr.corner)) return;
+        const onOther = chains.some(o => {
+          if (o === c) return false;
+          // the partner's OWN line must carry the corner (not just any chain)
+          if (!o.mem.some(m => m.n === pr.n2 && m.side === pr.side2)) return false;
+          for (let s2 = 0; s2 + 1 < o.pts.length; s2++) if (ptSegM(pr.corner, o.pts[s2], o.pts[s2 + 1]) < 1.0) return true;
+          return false;
+        });
+        if (onOther) { if (atEnd) c.pts.push(pr.corner); else c.pts.unshift(pr.corner); }
+      });
+    });
+  });
 }
 // An edge strand that ends at a junction whose partner stretch is COMPLETE
 // reaches onto that band's corner point, so the line flows into the solid
@@ -625,7 +881,122 @@ function extendIntoBands(edgeChains, pairs) {
   });
 }
 let LASTCHAINS = null;
+// Last-resort connector (Andrew's rule, enforced literally): if a marked
+// side line still ends at a junction NOT joined to the marked geometry
+// beside it in its corner, join it to the nearest point of that geometry -
+// provided the join segment cuts no road's middle (veto v3) and properly
+// crosses no other green line. Runs after every other pass; in the common
+// case it fires zero times. (Gate12's holdouts - the Fifth/Angie
+// name-change, Velmar x Flatbush, Velmar x Flushing - were ends whose
+// corner bridges were vetoed against raw lines that the final paint
+// clips away; this pass vets against the FINAL geometry instead.)
+function lastResortConnect(edges, bands) {
+  if (!JUNC) buildJunctions();
+  const jList = Object.values(sharedVertexMap()).filter(l => new Set(l.map(e => e.n)).size >= 2)
+    .map(l => ({ V: GEO[l[0].n].stitched[l[0].vi], streets: [...new Set(l.map(e => e.n))] }));
+  const frameFor = (V, A, B) => {
+    const J1 = (JUNC[A] || []).find(x => x.B === B && jDistM(x.V, V) < 2);
+    const J2 = (JUNC[B] || []).find(x => x.B === A && jDistM(x.V, V) < 2);
+    return (J1 && J2) ? { nA: J2.nB, nB: J1.nB } : null;
+  };
+  const compsOf = list => {
+    const parent = list.map((_, i) => i);
+    const find = x => parent[x] === x ? x : (parent[x] = find(parent[x]));
+    const onLine = (pt, c, thr) => { for (let s2 = 0; s2 + 1 < c.pts.length; s2++) if (ptSegM(pt, c.pts[s2], c.pts[s2 + 1]) < thr) return true; return false; };
+    const touch = (A, B, i, j) => {
+      const eA = [A.pts[0], A.pts[A.pts.length - 1]], eB = [B.pts[0], B.pts[B.pts.length - 1]];
+      if (eA.some(pt => eB.some(q => coordKey(pt) === coordKey(q)))) return true;
+      const thr = (i >= edges.length || j >= edges.length) ? 4.8 : 1.0;
+      return eA.some(pt => onLine(pt, B, thr)) || eB.some(pt => onLine(pt, A, thr));
+    };
+    list.forEach((A, i) => list.forEach((B, j) => { if (j > i && touch(A, B, i, j)) parent[find(i)] = find(j); }));
+    return list.map((_, i) => find(i));
+  };
+  const properCross = (a, b, c, d) => {
+    if (!segCross(a, b, c, d)) return false;
+    const X = lineHit(a, b, c, d);
+    return !!X && [a, b, c, d].every(pt => jDistM(X, pt) >= 0.35);
+  };
+  for (let round = 0; round < 60; round++) {
+    const list = edges.concat(bands);
+    const comp = compsOf(list);
+    let acted = false;
+    outer:
+    for (const { V, streets } of jList) for (let ai = 0; ai < streets.length; ai++) for (let bi = ai + 1; bi < streets.length; bi++) {
+      const A = streets[ai], B = streets[bi], fr = frameFor(V, A, B);
+      if (!fr) continue;
+      const Vx = XYOf(V);
+      const signs = pt => { const w = XYOf(pt); return [Math.sign((w[0] - Vx[0]) * fr.nA[0] + (w[1] - Vx[1]) * fr.nA[1]), Math.sign((w[0] - Vx[0]) * fr.nB[0] + (w[1] - Vx[1]) * fr.nB[1])]; };
+      const inQ = (sg, q) => (q[0] === 0 || sg[0] === 0 || sg[0] === q[0]) && (q[1] === 0 || sg[1] === 0 || sg[1] === q[1]);
+      const nearChains = [];
+      list.forEach((c, ci) => {
+        if (!c.mem.some(m => m.n === A || m.n === B)) return;
+        const pn = c.pts.filter(pt => jDistM(pt, V) < 11);
+        if (pn.length) nearChains.push({ ci, pn });
+      });
+      const ends = [];
+      edges.forEach((c, ci) => {
+        [{ pt: c.pts[0], meta: c.e0, atEnd: false }, { pt: c.pts[c.pts.length - 1], meta: c.e1, atEnd: true }].forEach(E => {
+          if (E.meta && (E.meta.n === A || E.meta.n === B) && jDistM(E.pt, V) < 11) ends.push({ ci, ...E });
+        });
+      });
+      for (const E of ends) {
+        const sg = signs(E.pt);
+        const quads = [];
+        (sg[0] === 0 ? [1, -1] : [sg[0]]).forEach(sa => (sg[1] === 0 ? [1, -1] : [sg[1]]).forEach(sb => quads.push([sa, sb])));
+        let satisfied = false, partners = [];
+        for (const q of quads) {
+          partners = nearChains.filter(nc => nc.ci !== E.ci && nc.pn.some(pt => inQ(signs(pt), q)));
+          if (partners.some(nc => comp[nc.ci] === comp[E.ci])) { satisfied = true; break; }
+        }
+        if (satisfied || !partners.length) continue;
+        const cands = [];
+        partners.forEach(nc => {
+          const c = list[nc.ci];
+          for (let si = 0; si + 1 < c.pts.length; si++) {
+            const a = c.pts[si], b = c.pts[si + 1], ax = XYOf(a), bx = XYOf(b), ex = XYOf(E.pt);
+            const dx = bx[0] - ax[0], dy = bx[1] - ax[1], L2 = dx * dx + dy * dy || 1;
+            let t = ((ex[0] - ax[0]) * dx + (ex[1] - ax[1]) * dy) / L2;
+            t = Math.max(0, Math.min(1, t));
+            const np = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+            cands.push({ d: jDistM(E.pt, np), np, ci: nc.ci, si });
+          }
+        });
+        cands.sort((x, y) => x.d - y.d);
+        for (const cand of cands) {
+          if (cand.d > 13 || cand.d < 0.3) continue;
+          const seg = [E.pt, cand.np];
+          let badPath = ptSegM(V, seg[0], seg[1]) < 1.5;
+          if (!badPath) for (const n2 of names) {
+            const st = GEO[n2].stitched;
+            for (let si = 0; si + 1 < st.length && !badPath; si++) {
+              if (ptSegM(V, st[si], st[si + 1]) >= 13 || !segCross(seg[0], seg[1], st[si], st[si + 1])) continue;
+              const X = lineHit(seg[0], seg[1], st[si], st[si + 1]);
+              if (!X || jDistM(X, V) > 6) badPath = true;
+            }
+          }
+          if (badPath) continue;
+          let badGreen = false;
+          edges.forEach((c2, ci2) => {
+            if (ci2 === E.ci || badGreen) return;
+            for (let si = 0; si + 1 < c2.pts.length; si++) {
+              if (ci2 === cand.ci && si === cand.si) continue;
+              if (properCross(seg[0], seg[1], c2.pts[si], c2.pts[si + 1])) { badGreen = true; break; }
+            }
+          });
+          if (badGreen) continue;
+          const chain = edges[E.ci];
+          if (E.atEnd) chain.pts.push(cand.np); else chain.pts.unshift(cand.np);
+          acted = true;
+          break outer;
+        }
+      }
+    }
+    if (!acted) break;
+  }
+}
 function buildFamilies() {
+  THROUGH_SEGS = [];
   const pairs = junctionPairs();
   const centreSlices = [], bandSlices = [], edgeSlices = [];
   names.forEach(n => {
@@ -643,8 +1014,10 @@ function buildFamilies() {
   const centres = mergeStrands(centreSlices, null);
   const bands = mergeStrands(bandSlices, null);
   const edges = mergeStrands(edgeSlices, pairs);
-  bridgeStragglers(edges);
+  bridgeStragglers(edges, pairs);
+  throughTouch(edges, pairs);
   extendIntoBands(edges, pairs);
+  lastResortConnect(edges, bands);
   LASTCHAINS = { centres, bands, edges };
   const fc = (list, colFn) => ({ type: 'FeatureCollection', features: list.map(sl => { const c = colFn(sl); return { type: 'Feature', properties: { col: c, colG: mute(c) }, geometry: { type: 'LineString', coordinates: GJ(sl.pts) } }; }) });
   return { centres: fc(centres, sl => sl.key), bands: fc(bands, () => MUGREEN), edges: fc(edges, () => MUGREEN) };
