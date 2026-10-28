@@ -338,6 +338,107 @@ function lineHit(p1, p2, p3, p4) {
   return [(a[1] + t * (b[1] - a[1])) / MLAT, (a[0] + t * (b[0] - a[0])) / MLNG];
 }
 const coordKey = p => p[0].toFixed(7) + ',' + p[1].toFixed(7);
+// ---- kerb model (Andrew, 2026-10-28, round 7): a side line behaves like
+// a kerb. It stops at the EDGE of a crossing road and joins around the
+// corner (the pairing bridges in mergeStrands); it never runs through a
+// junction. Two full-length lines at a corner MUST cross - that X, and
+// the stub poking past to the crossing street's centreline, were the
+// "still overlapping" defect in his screenshot. Opaque paint (round 6)
+// only stopped the overlap looking darker; this removes the overlap.
+const CORRIDOR = 5.2;   // metres: half the drawn road width
+let JUNC = null;
+function buildJunctions() {
+  JUNC = {}; names.forEach(n => { JUNC[n] = []; });
+  const at = {};
+  names.forEach(n => GEO[n].stitched.forEach((pt, vi) => { const k = coordKey(pt); (at[k] = at[k] || []).push({ n, vi }); }));
+  const dirAt = (n, vi) => {
+    const st = GEO[n].stitched, a = XYOf(st[Math.max(0, vi - 1)]), b = XYOf(st[Math.min(st.length - 1, vi + 1)]);
+    const dx = b[0] - a[0], dy = b[1] - a[1], m = Math.hypot(dx, dy) || 1;
+    return [dx / m, dy / m];
+  };
+  Object.values(at).forEach(list => {
+    if (new Set(list.map(e => e.n)).size < 2) return;
+    list.forEach(A => list.forEach(B => {
+      if (A.n === B.n) return;
+      const dA = dirAt(A.n, A.vi), dB = dirAt(B.n, B.vi);
+      JUNC[A.n].push({ B: B.n, viA: A.vi, V: GEO[A.n].stitched[A.vi], dB, nB: [-dB[1], dB[0]], sin: Math.abs(dA[0] * dB[1] - dA[1] * dB[0]) });
+    }));
+  });
+}
+// Cut one piece at one junction: the part inside the crossing street's
+// corridor (within CORRIDOR metres of its centreline, near the junction)
+// is removed; the cut ends land exactly on the corridor boundary and are
+// tagged so mergeStrands can bridge them around the corner.
+function clipOne(pc, J, R) {
+  const Vx = XYOf(J.V), L = R / Math.max(J.sin, 0.42) + 9;
+  const W = p => { const q = XYOf(p); return (q[0] - Vx[0]) * J.nB[0] + (q[1] - Vx[1]) * J.nB[1]; };
+  const U = p => { const q = XYOf(p); return (q[0] - Vx[0]) * J.dB[0] + (q[1] - Vx[1]) * J.dB[1]; };
+  const inside = p => Math.abs(W(p)) < R - 1e-9 && Math.abs(U(p)) < L;
+  const aug = [pc.pts[0]];
+  for (let i = 0; i + 1 < pc.pts.length; i++) {
+    const p = pc.pts[i], q = pc.pts[i + 1], wp = W(p), wq = W(q), cr = [];
+    [R, -R].forEach(sv => {
+      if ((wp - sv) * (wq - sv) < 0) {
+        const t = (sv - wp) / (wq - wp);
+        const c = [p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])];
+        if (Math.abs(U(c)) < L) cr.push({ t, c });
+      }
+    });
+    cr.sort((x, y) => x.t - y.t).forEach(({ c }) => { if (coordKey(c) !== coordKey(aug[aug.length - 1])) aug.push(c); });
+    if (coordKey(q) !== coordKey(aug[aug.length - 1])) aug.push(q);
+  }
+  const tag = { clip: J.B, vi: J.viA };
+  const res = [];
+  let cur = null;
+  aug.forEach((p, i) => {
+    if (!inside(p)) {
+      if (!cur) cur = { pts: [p], sTag: (i === 0 ? pc.sTag : (res.length === 0 && !aug.slice(0, i).some(inside) ? pc.sTag : tag)), eTag: null };
+      else cur.pts.push(p);
+    } else if (cur) { cur.eTag = tag; res.push(cur); cur = null; }
+  });
+  if (cur) { cur.eTag = pc.eTag; res.push(cur); }
+  return res;
+}
+function clipPieces(piecesIn, A, R = CORRIDOR) {
+  if (!JUNC) buildJunctions();
+  let pieces = piecesIn;
+  for (const J of JUNC[A]) {
+    if (J.sin <= 0.42) continue;   // near-parallel traces run together (overlaps) - not crossings
+    const out = [];
+    for (const pc of pieces) out.push(...clipOne(pc, J, R));
+    pieces = out.filter(pc => pc.pts.length >= 2);
+    if (!pieces.length) break;
+  }
+  return pieces;
+}
+// Marked side runs for one street+side: consecutive marked stretches
+// concatenated, then kerb-clipped at every junction. Returns strand
+// slices for mergeStrands (clip ends carry the junction vertex so the
+// pairing bridges can join them around the corner).
+function edgeRunSlices(n, side, marked) {
+  const g = GEO[n], off = side === 0 ? g.off0 : g.off1, out = [];
+  let run = null;
+  const flush = () => {
+    if (!run) return;
+    const startMeta = { n, vi: g.cuts[run.firstIdx][0], side }, endMeta = { n, vi: g.cuts[run.lastIdx][1], side };
+    const mem = []; for (let i = run.firstIdx; i <= run.lastIdx; i++) mem.push({ n, idx: i, side });
+    let clipped = clipPieces([{ pts: run.pts, sTag: null, eTag: null }], n);
+    if (!clipped.length) clipped = clipPieces([{ pts: run.pts, sTag: null, eTag: null }], n, 3.4);
+    clipped.forEach(pc => {
+      out.push({ pts: pc.pts, key: 'edge', mem, e0: pc.sTag ? { n, vi: pc.sTag.vi, side } : startMeta, e1: pc.eTag ? { n, vi: pc.eTag.vi, side } : endMeta });
+    });
+    run = null;
+  };
+  g.cuts.forEach((ab, idx) => {
+    if (marked(idx)) {
+      const sl = off.slice(ab[0], ab[1] + 1);
+      if (run && run.lastIdx === idx - 1) { run.pts = run.pts.concat(sl.slice(1)); run.lastIdx = idx; }
+      else { flush(); run = { pts: sl.slice(), firstIdx: idx, lastIdx: idx }; }
+    } else flush();
+  });
+  flush();
+  return out;
+}
 // Junction pairing: at every shared vertex, which marked side continues
 // into which around their shared corner. A pair survives only when the
 // corner path crosses no centreline segment near the junction.
@@ -389,6 +490,13 @@ function junctionPairs() {
 // merges simply run to a fixpoint, exact joins preferred over hops.
 function mergeStrands(slices, pairs) {
   const rev = sl => ({ pts: [...sl.pts].reverse(), key: sl.key, mem: sl.mem, e0: sl.e1, e1: sl.e0 });
+  const pathBadNear = (pts, J) => {
+    for (let s2 = 0; s2 + 1 < pts.length; s2++) for (const n2 of names) {
+      const st = GEO[n2].stitched;
+      for (let si = 0; si + 1 < st.length; si++) if (ptSegM(J, st[si], st[si + 1]) < 13 && segCross(pts[s2], pts[s2 + 1], st[si], st[si + 1])) return true;
+    }
+    return false;
+  };
   const joinInfo = (a, b) => {
     const out = [];
     const aS = coordKey(a.pts[0]), aE = coordKey(a.pts[a.pts.length - 1]);
@@ -403,7 +511,15 @@ function mergeStrands(slices, pairs) {
           const match = m => m && m.n === pr.n2 && m.vi === pr.vi2 && m.side === pr.side2;
           const bo = match(b.e0) ? b : match(b.e1) ? rev(b) : null;
           if (!bo) return;
-          const bridge = pr.corner ? [pr.corner] : [];
+          // vet the actual bridge path (from the real clip ends); try the
+          // corner path, then the chord, else leave a gap at the corner
+          const J = GEO[pr.n2].stitched[pr.vi2];
+          const aEnd = atEnd ? a.pts[a.pts.length - 1] : a.pts[0];
+          const bStart = bo.pts[0];   // bo is oriented so its start carries the matching meta
+          let bridge = null;
+          if (pr.corner && !pathBadNear([aEnd, pr.corner, bStart], J)) bridge = [pr.corner];
+          else if (!pathBadNear([aEnd, bStart], J)) bridge = [];
+          if (!bridge) return;
           if (atEnd) out.push({ score: 1, merged: { pts: a.pts.concat(bridge, bo.pts), key: a.key, mem: a.mem.concat(bo.mem), e0: a.e0, e1: bo.e1 } });
           else out.push({ score: 1, merged: { pts: [...bo.pts].reverse().concat(bridge.slice().reverse(), a.pts), key: a.key, mem: bo.mem.concat(a.mem), e0: bo.e1, e1: a.e1 } });
         });
@@ -451,12 +567,9 @@ function buildFamilies() {
       const cPts = g.stitched.slice(ab[0], ab[1] + 1);
       if (bits === 3) bandSlices.push({ pts: cPts, key: 'band', mem: [{ n, idx }], e0: null, e1: null });
       else centreSlices.push({ pts: cPts, key: mute(colOf(n, bits)), mem: [{ n, idx }], e0: null, e1: null });
-      if (bits !== 3) [0, 1].forEach(side => {
-        if (bits & (1 << side)) {
-          const off = side === 0 ? g.off0 : g.off1;
-          edgeSlices.push({ pts: off.slice(ab[0], ab[1] + 1), key: 'edge', mem: [{ n, idx, side }], e0: { n, vi: ab[0], side }, e1: { n, vi: ab[1], side } });
-        }
-      });
+    });
+    [0, 1].forEach(side => {
+      edgeRunSlices(n, side, idx => pieces[n][idx] !== 3 && (pieces[n][idx] & (1 << side))).forEach(sl => edgeSlices.push(sl));
     });
   });
   const centres = mergeStrands(centreSlices, null);
@@ -471,7 +584,7 @@ function buildSel(which) {   // the selected sector's side lines (vibrant)
   const feats = [];
   if (sel) {
     const g = GEO[sel.name], ab = g.cuts[sel.idx], bits = pieces[sel.name][sel.idx];
-    if (which === 'e' && bits !== 3) [g.off0, g.off1].forEach((off, side) => { if (bits & (1 << side)) feats.push({ type: 'Feature', properties: { col: GREEN, colG: mute(GREEN) }, geometry: { type: 'LineString', coordinates: GJ(off.slice(ab[0], ab[1] + 1)) } }); });
+    if (which === 'e' && bits !== 3) [0, 1].forEach(side => { if (bits & (1 << side)) edgeRunSlices(sel.name, side, idx => idx === sel.idx).forEach(sl => feats.push({ type: 'Feature', properties: { col: GREEN, colG: mute(GREEN) }, geometry: { type: 'LineString', coordinates: GJ(sl.pts) } })); });
   }
   return { type: 'FeatureCollection', features: feats };
 }
