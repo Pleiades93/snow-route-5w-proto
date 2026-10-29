@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r15-0601">
+<meta name="build" content="r19-0940">
 </head>
 <body>
 <div id="map"></div>
@@ -48,10 +48,7 @@
     <button id="streetDone" disabled>Street done</button><button id="streetReset" disabled>Reset street</button>
     <button id="panelHide" style="margin-left:auto">Hide panel ▾</button><button class="updBtn" style="margin-left:8px">⟳ Update</button>
   </div>
-  <div class="row"><span class="lab">Style</span>
-    <button data-selfx="brackets">Brackets</button><button data-selfx="halo">Halo</button><button data-selfx="seam">Seam</button><button data-selfx="dots">Dots</button><button data-selfx="pulse">Pulse</button>
   </div>
-</div>
 <button id="panelShow" class="chip">⚙ Controls</button>
 <button id="updShow" class="chip updBtn">⟳ Update</button>
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js" integrity="sha384-SYKAG6cglRMN0RVvhNeBY0r3FYKNOJtznwA0v7B5Vp9tr31xAHsZC0DqkQ/pZDmj" crossorigin="anonymous"></script>
@@ -1634,10 +1631,7 @@ function addStack() {
     map.addSource('sel', { type: 'geojson', data: CUR.sel });
     map.addSource('selBand', { type: 'geojson', data: CUR.selBand });
     map.addSource('selEdges', { type: 'geojson', data: CUR.selEdges });
-    const FX0 = buildSelFx();
-    map.addSource('selHalo', { type: 'geojson', data: FX0.halo });
-    map.addSource('selFx', { type: 'geojson', data: FX0.fx });
-    map.addSource('selPts', { type: 'geojson', data: FX0.pts });
+    map.addSource('selGlow', { type: 'geojson', data: buildSelGlow() });
     map.addSource('hit', { type: 'geojson', data: HIT });
     map.addSource('labels', { type: 'geojson', data: LABELS });
   }
@@ -1650,20 +1644,23 @@ function addStack() {
   add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  // --- selection style toggles (round 14): the halo sits under the vibrant redraw ---
-  add(line('sel-halo-s', 'selHalo', { 'line-color': '#ffffff', 'line-width': wPlus(surfW, 5), 'line-opacity': 0.9 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
-  add(line('sel-halo-b', 'selHalo', { 'line-color': '#ffffff', 'line-width': wPlus(BANDW, 5), 'line-opacity': 0.9 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
+  // --- selection glow (round 16, restored onto the r15 paint at
+  // Andrew's direction 2026-10-29): three nested widths in the
+  // street's OWN colour under the vibrant redraw; managePulse
+  // breathes them with the overlay so the street itself lights up.
+  // The ONLY selection treatment - the round-14 style toggle
+  // buttons are removed. ---
+  add(line('sel-glow1-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 17), 'line-opacity': 0.10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow1-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 17), 'line-opacity': 0.10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
+  add(line('sel-glow2-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 9), 'line-opacity': 0.16 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow2-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 9), 'line-opacity': 0.16 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
+  add(line('sel-glow3-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 4), 'line-opacity': 0.24 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow3-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 4), 'line-opacity': 0.24 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
   // --- selection overlay: the base spec redrawn in the VIBRANT colour -
   // identical widths and glow, so the only difference is the colour pop ---
   add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  // --- selection style toggles (round 14): brackets / seam / pulse / dots ride on top ---
-  add(line('fx-bracket-case', 'selFx', { 'line-color': '#22262e', 'line-width': 6.5, 'line-opacity': 0.95 }, { 'line-cap': 'butt' }, ['==', ['get', 'kind'], 'bracket']));
-  add(line('fx-bracket', 'selFx', { 'line-color': '#ffffff', 'line-width': 3.5, 'line-opacity': 1 }, { 'line-cap': 'butt' }, ['==', ['get', 'kind'], 'bracket']));
-  add(line('fx-seam', 'selFx', { 'line-color': '#ffffff', 'line-width': 2.4, 'line-opacity': 0.95, 'line-dasharray': [2.2, 1.8] }, { 'line-cap': 'butt' }, ['==', ['get', 'kind'], 'seam']));
-  add(line('fx-pulse', 'selFx', { 'line-color': ['get', 'col'], 'line-width': 3.0, 'line-opacity': 0.7 }, { 'line-cap': 'butt' }, ['==', ['get', 'kind'], 'pulse']));
-  if (!map.getLayer('fx-dots')) map.addLayer({ id: 'fx-dots', type: 'circle', source: 'selPts', paint: { 'circle-radius': 6.5, 'circle-color': '#ffffff', 'circle-stroke-color': '#22262e', 'circle-stroke-width': 2.5 } }, before);
   // --- hit + labels (every treatment) ---
   add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
@@ -1681,49 +1678,34 @@ function setTreatment(t) {
     map.getStyle().layers.filter(l => l.id.startsWith(p + '-')).forEach(l => map.setLayoutProperty(l.id, 'visibility', i === t ? 'visible' : 'none'));
   });
 }
-// ---- selection style toggles (round 14, Andrew: wire all five) ----
-// Vibrancy stays the base signal; each style is an independent add-on
-// the panel toggles, all derived from the same edge-clipped selected
-// slice (selectedGeom), so they hug the exact painted shape.
-const selFx = { brackets: false, halo: false, seam: false, dots: false, pulse: false };
+// ---- selection glow (round 16 treatment on the r15 paint base;
+// the five style toggle buttons were removed at Andrew's order) ----
 let pulseTimer = null;
-function buildSelFx() {
-  const out = { halo: EMPTYFC, fx: EMPTYFC, pts: EMPTYFC };
+function buildSelGlow() {
   const sg = selectedGeom();
-  if (!sg) return out;
-  const { pts, bits, half } = sg;
-  if (selFx.halo) out.halo = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { band: bits === 3 ? 1 : 0 }, geometry: { type: 'LineString', coordinates: GJ(pts) } }] };
-  const fx = [];
-  if (selFx.brackets) {
-    // orientation from the RAW trace heading (the street's own
-    // direction): the clipped end segment runs along the crossing
-    // street's normal, and a bracket perpendicular to THAT lies
-    // along the junction - a chevron, not a bar (round 14 tour).
-    const g = GEO[sel.name], ab = g.cuts[sel.idx];
-    const raw = g.stitched.slice(ab[0], ab[1] + 1);
-    [true, false].forEach(atStart => {
-      const E = atStart ? pts[0] : pts[pts.length - 1];
-      const cs = endCorners(raw, atStart, half);
-      if (cs.length !== 2) return;
-      const rE = atStart ? raw[0] : raw[raw.length - 1];
-      const Ex = XYOf(E), Rx = XYOf(rE), Cx = XYOf(cs[0]);
-      let ux = (Cx[0] - Rx[0]) / half, uy = (Cx[1] - Rx[1]) / half;   // unit across-the-road direction (xy)
-      const m = Math.hypot(ux, uy) || 1; ux /= m; uy /= m;
-      const b1 = [(Ex[1] + uy * (half + 1.2)) / MLAT, (Ex[0] + ux * (half + 1.2)) / MLNG];
-      const b2 = [(Ex[1] - uy * (half + 1.2)) / MLAT, (Ex[0] - ux * (half + 1.2)) / MLNG];
-      fx.push({ type: 'Feature', properties: { kind: 'bracket' }, geometry: { type: 'LineString', coordinates: GJ([b1, b2]) } });
-    });
-  }
-  if (selFx.seam) fx.push({ type: 'Feature', properties: { kind: 'seam' }, geometry: { type: 'LineString', coordinates: GJ(pts) } });
-  if (selFx.pulse) [half + 1.0, -(half + 1.0)].forEach(off => fx.push({ type: 'Feature', properties: { kind: 'pulse', col: colOf(sel.name, bits) }, geometry: { type: 'LineString', coordinates: GJ(offsetLine(pts, off)) } }));
-  if (fx.length) out.fx = { type: 'FeatureCollection', features: fx };
-  if (selFx.dots) out.pts = { type: 'FeatureCollection', features: [pts[0], pts[pts.length - 1]].map(p => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p[1], p[0]] } })) };
-  return out;
+  if (!sg) return EMPTYFC;
+  return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { col: colOf(sel.name, sg.bits), band: sg.bits === 3 ? 1 : 0 }, geometry: { type: 'LineString', coordinates: GJ(sg.pts) } }] };
 }
 function managePulse() {
-  const want = selFx.pulse && !!sel && !!(typeof map !== 'undefined' && map && map.getLayer && map.getLayer('fx-pulse'));
-  if (want && !pulseTimer) { let ph = 0; pulseTimer = setInterval(() => { ph += 0.11; if (map && map.getLayer('fx-pulse')) map.setPaintProperty('fx-pulse', 'line-opacity', 0.55 + 0.4 * Math.sin(ph)); }, 50); }
-  else if (!want && pulseTimer) { clearInterval(pulseTimer); pulseTimer = null; }
+  // The selection breathes (round 16, Andrew's spec): the glow
+  // stack and the vibrant redraw pulse TOGETHER in the street's
+  // own colour, so the selected stretch looks lit from within -
+  // not outlined, not bordered. Runs only while a stretch is
+  // selected.
+  const want = !!sel && !!(typeof map !== 'undefined' && map && map.getLayer && map.getLayer('sel-glow1-s'));
+  if (want && !pulseTimer) {
+    let ph = 0;
+    pulseTimer = setInterval(() => {
+      if (!map) return;
+      ph += 0.09;
+      const s = 0.5 + 0.5 * Math.sin(ph);   // 0..1 breathing cycle
+      const set = (id, v) => { if (map.getLayer(id)) map.setPaintProperty(id, 'line-opacity', v); };
+      set('sel-glow1-s', 0.04 + 0.13 * s); set('sel-glow1-b', 0.04 + 0.13 * s);
+      set('sel-glow2-s', 0.06 + 0.19 * s); set('sel-glow2-b', 0.06 + 0.19 * s);
+      set('sel-glow3-s', 0.10 + 0.26 * s); set('sel-glow3-b', 0.10 + 0.26 * s);
+      set('t1-sel', 0.74 + 0.26 * s); set('t1-selband', 0.74 + 0.26 * s);
+    }, 50);
+  } else if (!want && pulseTimer) { clearInterval(pulseTimer); pulseTimer = null; }
 }
 function applyStates() {
   rebuildData();
@@ -1734,10 +1716,7 @@ function applyStates() {
     map.getSource('sel').setData(CUR.sel);
     map.getSource('selBand').setData(CUR.selBand);
     map.getSource('selEdges').setData(CUR.selEdges);
-    const FX = buildSelFx();
-    if (map.getSource('selHalo')) map.getSource('selHalo').setData(FX.halo);
-    if (map.getSource('selFx')) map.getSource('selFx').setData(FX.fx);
-    if (map.getSource('selPts')) map.getSource('selPts').setData(FX.pts);
+    if (map.getSource('selGlow')) map.getSource('selGlow').setData(buildSelGlow());
   }
   managePulse();
   renderStatus();
@@ -1862,7 +1841,6 @@ function setBackground(id) {
   setTimeout(() => { if (!done && !map.getSource('centres')) { done = true; pickFont(); addStack(); applyBaseFx(); } }, 12000);
 }
 document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => {
-document.querySelectorAll('[data-selfx]').forEach(b => b.addEventListener('click', () => { const k = b.dataset.selfx; selFx[k] = !selFx[k]; b.classList.toggle('on', selFx[k]); applyStates(); }));
   document.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('on', x === b));
   setBackground(b.dataset.mode === 'dark' ? 'carto-dark' : 'vers-colorful');
 }));
@@ -1889,7 +1867,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r15-0601).
+// at build time (r19-0940).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
