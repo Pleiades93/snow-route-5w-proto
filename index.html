@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r38-1327">
+<meta name="build" content="r39-1334">
 </head>
 <body>
 <div id="map"></div>
@@ -335,6 +335,20 @@ names.forEach(n => {
   f.geometry.coordinates = [A0[1] + (dx / dl) * 45 / MLNG, A0[0] + (dy / dl) * 45 / MLAT];
 })();
 const LABELS = { type: 'FeatureCollection', features: labelFeatures };
+// Round 39 (Andrew): street names DEPUPULATE as he zooms out - from
+// 13.7 the shortest streets' names drop away in tiers, longest last,
+// until 12.6 where the melt finishes everything. Tier = stitched-
+// length quartile (computed from the data, no hand-set lengths); the
+// six MAIN streets are forced into the final tier regardless of
+// length (Astona is a main but only 187 m long).
+(function assignTiers() {
+  const lens = labelPointFeatures.map(f => f.properties.len).sort((a, b) => a - b);
+  const q = p => lens[Math.min(lens.length - 1, Math.floor(p * lens.length))];
+  const q1 = q(0.25), q2 = q(0.5), q3 = q(0.75);
+  labelPointFeatures.forEach(f => {
+    f.properties.tier = MAIN.has(f.properties.name) ? 4 : (f.properties.len < q1 ? 1 : f.properties.len < q2 ? 2 : f.properties.len < q3 ? 3 : 4);
+  });
+})();
 const LABELPTS = { type: 'FeatureCollection', features: labelPointFeatures };
 const ROUTEPOI = (() => { let a = 90, b = -90, c = 180, d = -180; names.forEach(n => GEO[n].stitched.forEach(p => { a = Math.min(a, p[0]); b = Math.max(b, p[0]); c = Math.min(c, p[1]); d = Math.max(d, p[1]); })); return { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [(c + d) / 2, (a + b) / 2] } }; })();
 
@@ -1800,17 +1814,25 @@ function addStack() {
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
     map.addLayer({ id: 'streetnames', type: 'symbol', source: 'labels', minzoom: 16.2, layout: { 'symbol-placement': 'line', 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 7.5, 16, 10.5, 18, 20], 'text-rotation-alignment': 'map', 'text-pitch-alignment': 'viewport' }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.4 } });
   }
-  // Round 35 (Andrew): the point labels now sit at the TOP of the
+  // Round 35/39 (Andrew): the point labels sit at the TOP of the
   // stack (appended last, like streetnames) so basemap symbols can no
   // longer knock them out - in Light, housenumber/POI symbols were
-  // silently killing Velmar's name. They exist only from zoom 14 up:
-  // zoomed further out he wants just the city names. When a centred
-  // name collides, text-variable-anchor lets the renderer try above /
-  // below / beside the point instead of dropping the name outright -
-  // that is what rescues Bloomingdale, whose neighbours sit ~23 px
-  // away at Overview no matter where along its segment it anchors.
-  if (!map.getLayer('streetnamespt')) {
-    map.addLayer({ id: 'streetnamespt', type: 'symbol', source: 'labelpts', minzoom: 12.6, maxzoom: 16.2, layout: { 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 10, 14.6, 10.5, 16.2, 12], 'text-padding': 1, 'text-variable-anchor': ['center', 'top', 'bottom', 'left', 'right'], 'text-radial-offset': 0.8, 'symbol-sort-key': ['-', ['get', 'len']], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 0, 13.3, 1], 'text-halo-width': 1.4 } });
+  // silently killing Velmar's name. When a centred name collides,
+  // text-variable-anchor lets the renderer try above / below / beside
+  // the point instead of dropping the name outright - that is what
+  // rescues Bloomingdale, whose neighbours sit ~23 px away at
+  // Overview no matter where along its segment it anchors.
+  // Round 39: FOUR tier layers (see assignTiers) with staggered
+  // minzooms - 13.7 / 13.35 / 13.0 / 12.6 - so the names depopulate
+  // shortest-first as he zooms out through 13.7 to 12.6, while every
+  // tier still melts with the paint over the 12.6-13.3 band. Longest
+  // tier appended last so it wins placement among the tiers.
+  const PT_MIN = [13.7, 13.35, 13.0, 12.6];
+  for (let t = 1; t <= 4; t++) {
+    const id = 'streetnamespt' + t;
+    if (!map.getLayer(id)) {
+      map.addLayer({ id, type: 'symbol', source: 'labelpts', minzoom: PT_MIN[t - 1], maxzoom: 16.2, filter: ['==', ['get', 'tier'], t], layout: { 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 10, 14.6, 10.5, 16.2, 12], 'text-padding': 1, 'text-variable-anchor': ['center', 'top', 'bottom', 'left', 'right'], 'text-radial-offset': 0.8, 'symbol-sort-key': ['-', ['get', 'len']], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 0, 13.3, 1], 'text-halo-width': 1.4 } });
+    }
   }
   // Round 35/37 (Andrew): zoomed far out, the route cluster blurs
   // into a blob. ONE melt band, 12.6 to 13.3 (r38: Andrew picked
@@ -2091,7 +2113,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r38-1327).
+// at build time (r39-1334).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
