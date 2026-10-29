@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r20-0946">
+<meta name="build" content="r21-0959">
 </head>
 <body>
 <div id="map"></div>
@@ -48,8 +48,8 @@
     <button id="streetDone" disabled>Street done</button><button id="streetReset" disabled>Reset street</button>
     <button id="panelHide" style="margin-left:auto">Hide panel ▾</button><button class="updBtn" style="margin-left:8px">⟳ Update</button>
   </div>
-  <div class="row"><span class="lab">Glow</span>
-    <button data-glow="0" class="on">Bloom</button><button data-glow="1">Soft</button><button data-glow="2">Hot core</button><button data-glow="3">Lit road</button>
+  <div class="row"><span class="lab">Pulse</span>
+    <button data-pulse="0">Slow</button><button data-pulse="1" class="on">Medium</button><button data-pulse="2">Fast</button><button data-pulse="3">Rapid</button>
   </div>
   </div>
 <button id="panelShow" class="chip">⚙ Controls</button>
@@ -1586,7 +1586,16 @@ function buildSelC() {   // the selected sector's core: a vibrant BAND when comp
 }
 const HIT = { type: 'FeatureCollection', features: names.flatMap(n => GEO[n].cuts.map((ab, i) => ({ type: 'Feature', properties: { name: n, idx: i }, geometry: { type: 'LineString', coordinates: GJ(GEO[n].stitched.slice(ab[0], ab[1] + 1)) } }))) };
 let CUR = null;
-function rebuildData() { const F = buildFamilies(); const SC = buildSelC(); CUR = { centres: F.centres, bands: F.bands, edges: F.edges, sel: SC.sel, selBand: SC.selBand, selEdges: buildSel('e') }; }
+function rebuildData() { const F = buildFamilies(); const SC = buildSelC();
+  // Paint order (round 21, Andrew's rule): within the centres source,
+  // RED strands sort before YELLOW strands, so at any junction yellow
+  // paints over red and the red street reads as butting into it.
+  // Completed (green) strands live in the bands source, whose layers
+  // sit below ALL centre layers in addStack - green is under both
+  // colours the same way. Geometry untouched; features only reorder.
+  const yRank = f => (f.properties.col === '#c8b579' || f.properties.col === '#ffd24a') ? 1 : 0;
+  F.centres.features.sort((a, b) => yRank(a) - yRank(b));
+  CUR = { centres: F.centres, bands: F.bands, edges: F.edges, sel: SC.sel, selBand: SC.selBand, selEdges: buildSel('e') }; }
 
 function applyMixed() {
   pieces = freshPieces();
@@ -1648,11 +1657,18 @@ function addStack() {
   const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer, before); };
   const line = (id, source, paint, layout, filter) => { const o = { id, type: 'line', source, layout: Object.assign({ 'line-cap': 'round', 'line-join': 'miter' }, layout || {}), paint }; if (filter) o.filter = filter; return o; };   // NOTE: a present-but-undefined `filter` key makes MapLibre silently drop the layer (found by the QA tour, 2026-10-28)
   // --- T1: integrated — the road surface itself carries the state ---
-  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  // Paint-order stack (round 21, Andrew's rule): the completed
+  // (green) family - band casing, band, side edges - renders BELOW
+  // all unfinished centre paint, and centre features are sorted
+  // red-then-yellow in rebuildData, so yellow is always on top.
+  // Every street dives under the higher-priority colour at a
+  // junction, which is what makes the butt illusion hold everywhere
+  // instead of depending on strand list order.
   add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- selection glow (round 16, restored onto the r15 paint at
   // Andrew's direction 2026-10-29): three nested widths in the
   // street's OWN colour under the vibrant redraw; managePulse
@@ -1712,8 +1728,10 @@ function buildSelGlow() {
 // p = width-plus px, s = width scale, b = line-blur px, o = base
 // opacity, a = breathing amplitude, c = colour property for the core.
 // road = [base, amplitude] for the vibrant redraw's own breathing. ----
-let glowPreset = 0;
-let glowAnim = { op: {}, road: [0.74, 0.26] };
+let glowPreset = 1;   // SOFT, locked as Andrew's final choice (round 21) - presets 0/2/3 remain in the table, dormant
+let glowAnim = { op: {}, road: [0.82, 0.18] };
+const PULSE_RATES = [0.04, 0.07, 0.11, 0.17];   // breathing phase step per 50ms tick: ~7.9s / ~4.5s / ~2.9s / ~1.9s per full cycle (round 21 panel comparison)
+let pulseRate = PULSE_RATES[1];
 const GLOW = [
   { road: [0.74, 0.26], layers: {   // 0 Bloom - the round-16 look
     'sel-glow1': { p: 17, b: 0, o: 0.10, a: 0.13 }, 'sel-glow2': { p: 9, b: 0, o: 0.16, a: 0.19 }, 'sel-glow3': { p: 4, b: 0, o: 0.24, a: 0.26 },
@@ -1758,7 +1776,7 @@ function managePulse() {
     let ph = 0;
     pulseTimer = setInterval(() => {
       if (!map) return;
-      ph += 0.09;
+      ph += pulseRate;
       const s = 0.5 + 0.5 * Math.sin(ph);   // 0..1 breathing cycle
       const set = (id, v) => { if (map.getLayer(id)) map.setPaintProperty(id, 'line-opacity', v); };
       Object.keys(glowAnim.op).forEach(id => set(id, glowAnim.op[id][0] + glowAnim.op[id][1] * s));
@@ -1908,7 +1926,7 @@ document.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click'
   const z = +b.dataset.zoom;
   if (reducedMotion) map.jumpTo({ center: CENTRE, zoom: z }); else map.flyTo({ center: CENTRE, zoom: z, duration: 650 });
 }));
-document.querySelectorAll('[data-glow]').forEach(b => b.addEventListener('click', () => { glowPreset = +b.dataset.glow; document.querySelectorAll('[data-glow]').forEach(x => x.classList.toggle('on', x === b)); applyGlow(); }));
+document.querySelectorAll('[data-pulse]').forEach(b => b.addEventListener('click', () => { pulseRate = PULSE_RATES[+b.dataset.pulse]; document.querySelectorAll('[data-pulse]').forEach(x => x.classList.toggle('on', x === b)); }));
 document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('[data-preset]').forEach(x => x.classList.toggle('on', x === b));
   if (b.dataset.preset === 'fresh') { pieces = freshPieces(); sel = null; }
@@ -1927,7 +1945,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r20-0946).
+// at build time (r21-0959).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
