@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r22-1010">
+<meta name="build" content="r23-1021">
 </head>
 <body>
 <div id="map"></div>
@@ -1728,16 +1728,16 @@ function buildSelGlow() {
 // opacity, a = breathing amplitude, c = colour property for the core.
 // road = [base, amplitude] for the vibrant redraw's own breathing. ----
 let glowPreset = 1;   // SOFT, locked as Andrew's final choice (round 21) - presets 0/2/3 remain in the table, dormant
-let glowAnim = { op: {}, road: [0.82, 0.18] };
+let glowAnim = { op: {}, road: [0.62, 0.38] };
 const PULSE_RATES = [0.04, 0.07, 0.11, 0.17];   // breathing phase step per 50ms tick: ~7.9s / ~4.5s / ~2.9s / ~1.9s per full cycle (round 21 panel comparison)
 let pulseRate = PULSE_RATES[1];
 const GLOW = [
   { road: [0.74, 0.26], layers: {   // 0 Bloom - the round-16 look
     'sel-glow1': { p: 17, b: 0, o: 0.10, a: 0.13 }, 'sel-glow2': { p: 9, b: 0, o: 0.16, a: 0.19 }, 'sel-glow3': { p: 4, b: 0, o: 0.24, a: 0.26 },
     'sel-glow4': null, 'sel-glow5': null, 'sel-core': null } },
-  { road: [0.82, 0.18], layers: {   // 1 Soft - blurred photographic spill
-    'sel-glow1': { p: 17, b: 8, o: 0.07, a: 0.05 }, 'sel-glow2': { p: 9, b: 5, o: 0.10, a: 0.06 }, 'sel-glow3': { p: 4, b: 2, o: 0.16, a: 0.10 },
-    'sel-glow4': { p: 30, b: 14, o: 0.05, a: 0.03 }, 'sel-glow5': { p: 23, b: 10, o: 0.06, a: 0.04 }, 'sel-core': null } },
+  { road: [0.62, 0.38], layers: {   // 1 Soft - blurred photographic spill. Round 23: breathing AMPLITUDE raised ~3x (Andrew could not perceive the original 0.03-0.10 swings at any speed - the loop was running, the swing was under the visibility floor). The inner layers carry the pulse; the wide spill stays gentle so it still reads soft, not strobing.
+    'sel-glow1': { p: 17, b: 8, o: 0.06, a: 0.10 }, 'sel-glow2': { p: 9, b: 5, o: 0.09, a: 0.14 }, 'sel-glow3': { p: 4, b: 2, o: 0.14, a: 0.20 },
+    'sel-glow4': { p: 30, b: 14, o: 0.04, a: 0.05 }, 'sel-glow5': { p: 23, b: 10, o: 0.05, a: 0.07 }, 'sel-core': null } },
   { road: [0.80, 0.20], layers: {   // 2 Hot core - near-white centre, coloured falloff
     'sel-glow1': { p: 17, b: 0, o: 0.08, a: 0.08 }, 'sel-glow2': { p: 10, b: 0, o: 0.13, a: 0.12 }, 'sel-glow3': { p: 5, b: 0, o: 0.20, a: 0.16 },
     'sel-glow4': null, 'sel-glow5': null, 'sel-core': { s: 0.42, b: 1.5, o: 0.85, a: 0.15, c: 'colHot' } } },
@@ -1944,7 +1944,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r22-1010).
+// at build time (r23-1021).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
