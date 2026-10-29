@@ -19,6 +19,7 @@
   button { appearance: none; border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.08); color: #f2f4f8; font-size: 13px; padding: 6px 10px; border-radius: 8px; }
   button.on { background: #2f7cf6; border-color: #2f7cf6; color: #fff; font-weight: 600; }
   button:disabled { opacity: .38; }
+  #bgSel { flex: 1; min-width: 120px; appearance: none; border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.08); color: #f2f4f8; font-size: 13px; padding: 6px 8px; border-radius: 8px; }
   #status { font-size: 13px; min-height: 17px; }
   #status b { color: #ffd24a; }
   #nogl { display: none; top: 64px; left: 10px; right: 10px; background: #7a1f1f; }
@@ -27,18 +28,35 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r10-2038">
+<meta name="build" content="r11-2058">
 </head>
 <body>
 <div id="map"></div>
-<div id="title" class="chip"><button id="titleX" title="Hide">×</button><b>Route 5W — rendering prototype</b><br><span>Not the tracker. Tap a street, then mark its sides. Compare the three looks, day and night, at working zooms. Build <b id="buildLab">?</b></span></div>
+<div id="title" class="chip"><button id="titleX" title="Hide">×</button><b>Route 5W — rendering prototype</b><br><span>Not the tracker. Tap a street, then mark its sides. Flip the background, houses and look to compare. Build <b id="buildLab">?</b></span></div>
 <div id="nogl" class="chip">WebGL is unavailable in this browser, so the vector map can't draw here. Open this page on your phone instead.</div>
 <div id="panel" class="chip">
   <div id="status">Loading map…</div>
   <div class="row"><span class="lab">Look</span>
     <button data-treat="0">Current</button><button data-treat="1" class="on">Integrated</button><button data-treat="2">Glow</button>
-    <span class="lab" style="width:auto;margin-left:6px">Base</span>
-    <button data-base="day" class="on">Day</button><button data-base="night">Night</button>
+  </div>
+  <div class="row"><span class="lab">Base</span>
+    <select id="bgSel">
+      <optgroup label="Light">
+        <option value="ofm-positron" selected>Positron — OpenFreeMap</option>
+        <option value="ofm-bright">Bright — OpenFreeMap</option>
+        <option value="ofm-liberty">Liberty — OpenFreeMap</option>
+        <option value="carto-positron">Positron — CARTO</option>
+        <option value="carto-voyager">Voyager — CARTO</option>
+        <option value="vers-colorful">Colorful — Versatiles</option>
+        <option value="vers-graybeard">Graybeard — Versatiles</option>
+        <option value="vers-neutrino">Neutrino — Versatiles</option>
+      </optgroup>
+      <optgroup label="Dark">
+        <option value="carto-dark">Dark Matter — CARTO</option>
+        <option value="vers-eclipse">Eclipse — Versatiles</option>
+      </optgroup>
+    </select>
+    <button id="housesBtn" class="on">Houses</button><button id="muteBtn">Mute base</button>
   </div>
   <div class="row"><span class="lab">Zoom</span>
     <button data-zoom="14.6">Overview</button><button data-zoom="16.8">Working</button><button data-zoom="18.4">Close</button>
@@ -1292,7 +1310,23 @@ applyMixed();
 rebuildData();
 
 // ================= map & treatments =================
-const STYLES = { day: 'https://tiles.openfreemap.org/styles/positron', night: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json' };
+// Background registry (round 11, Andrew: backgrounds + houses first).
+// Every entry verified live 2026-10-28: free, no key, and every style
+// carries a buildings layer the Houses toggle can reach. `dark` drives
+// baseMode, which only colours OUR casing + label text.
+const BGSTYLES = {
+  'ofm-positron': { url: 'https://tiles.openfreemap.org/styles/positron', dark: false },
+  'ofm-bright': { url: 'https://tiles.openfreemap.org/styles/bright', dark: false },
+  'ofm-liberty': { url: 'https://tiles.openfreemap.org/styles/liberty', dark: false },
+  'carto-positron': { url: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json', dark: false },
+  'carto-voyager': { url: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json', dark: false },
+  'vers-colorful': { url: 'https://tiles.versatiles.org/styles/colorful/style.json', dark: false },
+  'vers-graybeard': { url: 'https://tiles.versatiles.org/styles/graybeard/style.json', dark: false },
+  'vers-neutrino': { url: 'https://tiles.versatiles.org/styles/neutrino/style.json', dark: false },
+  'carto-dark': { url: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json', dark: true },
+  'vers-eclipse': { url: 'https://tiles.versatiles.org/styles/eclipse/style.json', dark: true },
+};
+let bgId = 'ofm-positron', housesOn = true, muteBase = false, baseOriginals = null, bldVis = null;
 const surfW = ['interpolate', ['linear'], ['zoom'], 14, 2.5, 16, 6.5, 17, 9.5, 18, 15, 19, 24];
 const BANDW = ['interpolate', ['linear'], ['zoom'], 15, 3, 16, 6, 17, 11, 18, 22, 19, 44];       // ~9.6 m of road width, tracking the geographic side offsets
 const BANDGLOW = ['interpolate', ['linear'], ['zoom'], 15, 10, 16, 14, 17, 20, 18, 32, 19, 56];
@@ -1409,13 +1443,13 @@ function pickFont() {
 }
 function init() {
   try {
-    map = new maplibregl.Map({ container: 'map', style: STYLES.day, bounds: BOUNDS, fitBoundsOptions: { padding: 24 }, attributionControl: { compact: true }, fadeDuration: 0 });
+    map = new maplibregl.Map({ container: 'map', style: BGSTYLES[bgId].url, bounds: BOUNDS, fitBoundsOptions: { padding: 24 }, attributionControl: { compact: true }, fadeDuration: 0 });
   } catch (e) {
     document.getElementById('nogl').style.display = 'block';
     document.getElementById('status').textContent = 'The vector map could not start in this browser.';
     return;
   }
-  map.on('load', () => { pickFont(); addStack(); document.getElementById('status').textContent = 'Map loaded.'; renderStatus(); });
+  map.on('load', () => { pickFont(); addStack(); applyBaseFx(); document.getElementById('status').textContent = 'Map loaded.'; renderStatus(); });
   map.on('error', e => { if (e && e.error && /webgl/i.test(String(e.error.message || ''))) document.getElementById('nogl').style.display = 'block'; });
   map.on('click', e => {
     const fs = map.queryRenderedFeatures(e.point, { layers: ['hit'] });
@@ -1424,11 +1458,67 @@ function init() {
   });
 }
 document.querySelectorAll('[data-treat]').forEach(b => b.addEventListener('click', () => setTreatment(+b.dataset.treat)));
-document.querySelectorAll('[data-base]').forEach(b => b.addEventListener('click', () => {
-  if (b.dataset.base === baseMode || !map) return;
-  baseMode = b.dataset.base;
-  document.querySelectorAll('[data-base]').forEach(x => x.classList.toggle('on', x.dataset.base === baseMode));
-  map.setStyle(STYLES[baseMode]);
+// --- background effects: houses + mute, re-applied after every swap ---
+const OURS = id => /^(t0|t1|t2)-/.test(id) || id === 'hit' || id === 'streetnames';
+// Desaturate one CSS colour (hex / rgb(a) / hsl(a)) toward grey, keeping
+// its lightness and alpha. Returns null for anything unparseable.
+function muteColor(c) {
+  let r, g, b, a = 1, m;
+  if ((m = c.match(/^#([0-9a-f]{3})$/i))) { const h = m[1]; r = parseInt(h[0] + h[0], 16); g = parseInt(h[1] + h[1], 16); b = parseInt(h[2] + h[2], 16); }
+  else if ((m = c.match(/^#([0-9a-f]{6})$/i))) { const h = m[1]; r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16); }
+  else if ((m = c.match(/^rgba?\(([^)]+)\)$/i))) { const p = m[1].split(',').map(x => parseFloat(x)); r = p[0]; g = p[1]; b = p[2]; if (p.length > 3) a = p[3]; }
+  else if ((m = c.match(/^hsla?\(([^)]+)\)$/i))) { const p = m[1].split(',').map(x => parseFloat(x)); if (p.length > 3) a = p[3]; return 'hsla(' + p[0] + ', ' + (p[1] * 0.35).toFixed(1) + '%, ' + p[2] + '%, ' + a + ')'; }
+  else return null;
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  if (!d) return c;
+  const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  let h = 0;
+  if (mx === r) h = (g - b) / d + (g < b ? 6 : 0); else if (mx === g) h = (b - r) / d + 2; else h = (r - g) / d + 4;
+  h *= 60;
+  const ns = s * 0.35, cc = (1 - Math.abs(2 * l - 1)) * ns, x = cc * (1 - Math.abs(((h / 60) % 2) - 1)), mm = l - cc / 2;
+  let rr, gg, bb;
+  if (h < 60) { rr = cc; gg = x; bb = 0; } else if (h < 120) { rr = x; gg = cc; bb = 0; } else if (h < 180) { rr = 0; gg = cc; bb = x; } else if (h < 240) { rr = 0; gg = x; bb = cc; } else if (h < 300) { rr = x; gg = 0; bb = cc; } else { rr = cc; gg = 0; bb = x; }
+  return 'rgba(' + Math.round((rr + mm) * 255) + ', ' + Math.round((gg + mm) * 255) + ', ' + Math.round((bb + mm) * 255) + ', ' + a + ')';
+}
+function applyMute() {
+  if (!map || !map.getStyle()) return;
+  if (!muteBase) {
+    if (baseOriginals) { Object.keys(baseOriginals).forEach(k => { const p = k.split('|'); try { map.setPaintProperty(p[0], p[1], baseOriginals[k]); } catch (e) {} }); baseOriginals = null; }
+    return;
+  }
+  if (!baseOriginals) baseOriginals = {};
+  const props = ['background-color', 'fill-color', 'line-color', 'text-color', 'fill-outline-color', 'icon-color'];
+  map.getStyle().layers.forEach(l => {
+    if (OURS(l.id)) return;
+    props.forEach(pr => {
+      let v; try { v = map.getPaintProperty(l.id, pr); } catch (e) { return; }
+      if (typeof v !== 'string') return;   // expressions keep the style's own logic - flat colours only
+      const key = l.id + '|' + pr;
+      if (!(key in baseOriginals)) baseOriginals[key] = v;
+      const m = muteColor(v);
+      if (m && m !== v) { try { map.setPaintProperty(l.id, pr, m); } catch (e) {} }
+    });
+  });
+}
+function applyBaseFx() {
+  if (!map || !map.getStyle()) return;
+  // Houses: capture each building layer's own specified visibility once
+  // per style, so ON restores the style's intent (a layer the style hides
+  // by design stays hidden), OFF hides them all.
+  if (!bldVis) {
+    bldVis = {};
+    map.getStyle().layers.forEach(l => { if (/building/i.test(l.id) && !OURS(l.id)) { try { bldVis[l.id] = map.getLayoutProperty(l.id, 'visibility') || 'visible'; } catch (e) {} } });
+  }
+  Object.keys(bldVis).forEach(id => { if (map.getLayer(id)) { try { map.setLayoutProperty(id, 'visibility', housesOn ? bldVis[id] : 'none'); } catch (e) {} } });
+  applyMute();
+}
+function setBackground(id) {
+  if (!map || !BGSTYLES[id] || id === bgId) return;
+  bgId = id;
+  baseMode = BGSTYLES[id].dark ? 'night' : 'day';
+  baseOriginals = null; bldVis = null;   // captured paint/visibility belong to the old style
+  map.setStyle(BGSTYLES[id].url);
   // Re-adding the route stack after a style swap: 'style.load' never fired
   // on MapLibre 4.7.1 and isStyleLoaded() never settled (swap tests,
   // 2026-10-28). Gate on the observable state instead: the new style is
@@ -1437,11 +1527,14 @@ document.querySelectorAll('[data-base]').forEach(b => b.addEventListener('click'
   const waiter = () => {
     if (done) return;
     const st = map.getStyle();
-    if (st && st.layers && st.layers.length > 0 && !map.getSource('centres')) { done = true; map.off('styledata', waiter); pickFont(); addStack(); }
+    if (st && st.layers && st.layers.length > 0 && !map.getSource('centres')) { done = true; map.off('styledata', waiter); pickFont(); addStack(); applyBaseFx(); }
   };
   map.on('styledata', waiter); waiter();
-  setTimeout(() => { if (!done && !map.getSource('centres')) { done = true; pickFont(); addStack(); } }, 12000);
-}));
+  setTimeout(() => { if (!done && !map.getSource('centres')) { done = true; pickFont(); addStack(); applyBaseFx(); } }, 12000);
+}
+document.getElementById('bgSel').addEventListener('change', e => setBackground(e.target.value));
+document.getElementById('housesBtn').addEventListener('click', () => { housesOn = !housesOn; document.getElementById('housesBtn').classList.toggle('on', housesOn); applyBaseFx(); });
+document.getElementById('muteBtn').addEventListener('click', () => { muteBase = !muteBase; document.getElementById('muteBtn').classList.toggle('on', muteBase); applyBaseFx(); });
 document.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => {
   if (!map) return;
   const z = +b.dataset.zoom;
@@ -1465,7 +1558,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r10-2038).
+// at build time (r11-2058).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
