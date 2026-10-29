@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r28-1200">
+<meta name="build" content="r29-1211">
 </head>
 <body>
 <div id="map"></div>
@@ -1627,6 +1627,37 @@ const BANDGLOW = ['interpolate', ['linear'], ['zoom'], 15, 10, 16, 14, 17, 20, 1
 const BANDCASE = ['interpolate', ['linear'], ['zoom'], 15, 5.5, 16, 9, 17, 15, 18, 27, 19, 50];
 const wPlus = (curve, d) => curve.map((v, i) => (i >= 4 && i % 2 === 0) ? v + d : v);   // widen an interpolate width curve by d px at every stop (widths sit at even indices >= 4)
 const wScale = (curve, f) => curve.map((v, i) => (i >= 4 && i % 2 === 0) ? v * f : v);   // scale an interpolate width curve (same index rule as wPlus)
+// Round 29 (Andrew): ZOOM-TAPERED glow. Zoomed out, the glow kept
+// its full screen width while the road shrank to a few px, so the
+// halo was ~10x the road and the street's crushed corner vertices
+// creased its softened edge into starburst rays (his Fifth Ave
+// shot). glowW/glowB scale the glow's extra width and blur down at
+// low zoom and reach EXACTLY the locked values from zoom 16.5 up,
+// so the working-zoom look he approved is numerically unchanged.
+const GLOW_TAPER = [[14, 0.15], [15, 0.32], [16, 0.68], [16.5, 1]];
+function taperAt(z) {
+  if (z <= GLOW_TAPER[0][0]) return GLOW_TAPER[0][1];
+  for (let i = 1; i < GLOW_TAPER.length; i++) {
+    if (z <= GLOW_TAPER[i][0]) {
+      const a = GLOW_TAPER[i - 1], b = GLOW_TAPER[i];
+      return a[1] + (b[1] - a[1]) * (z - a[0]) / (b[0] - a[0]);
+    }
+  }
+  return 1;
+}
+function curveAt(curve, z) {
+  if (z <= curve[3]) return curve[4];
+  for (let i = 5; i < curve.length; i += 2) {
+    if (z <= curve[i]) return curve[i + 1] + (curve[i - 1] - curve[i + 1]) * (curve[i] - z) / (curve[i] - curve[i - 2]);
+  }
+  return curve[curve.length - 1];
+}
+function glowW(curve, delta) {
+  const ex = ['interpolate', ['linear'], ['zoom']];
+  for (const z of [14, 15, 16, 16.5, 17, 18, 19]) ex.push(z, +(curveAt(curve, z) + delta * taperAt(z)).toFixed(2));
+  return ex;
+}
+function glowB(b) { return ['interpolate', ['linear'], ['zoom'], 14, +(b * 0.35).toFixed(2), 15.5, +(b * 0.6).toFixed(2), 16.5, b]; }
 function lighten(hex, f) {   // mix a #rrggbb colour toward white by f (0..1) - the "hot core" colours for the glow presets
   const n = parseInt(hex.slice(1), 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
   const m = c => Math.round(c + (255 - c) * f);
@@ -1778,8 +1809,8 @@ function applyGlow() {
       map.setLayoutProperty(id, 'visibility', L ? 'visible' : 'none');
       if (!L) return;
       const curve = sfx === '-b' ? BANDW : surfW;
-      map.setPaintProperty(id, 'line-width', L.p !== undefined ? wPlus(curve, L.p) : wScale(curve, L.s));
-      map.setPaintProperty(id, 'line-blur', L.b || 0);
+      map.setPaintProperty(id, 'line-width', L.p !== undefined ? glowW(curve, L.p) : wScale(curve, L.s));
+      map.setPaintProperty(id, 'line-blur', L.b ? glowB(L.b) : 0);
       if (L.c) map.setPaintProperty(id, 'line-color', ['get', L.c]);
       map.setPaintProperty(id, 'line-opacity', L.o);
       glowAnim.op[id] = [L.o, L.a];
@@ -1965,7 +1996,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r28-1200).
+// at build time (r29-1211).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
