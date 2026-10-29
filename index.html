@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r33-1242">
+<meta name="build" content="r34-1250">
 </head>
 <body>
 <div id="map"></div>
@@ -66,7 +66,7 @@ function glHideLabels(gl) {
   try {
     gl.getStyle().layers.forEach(l => {
       const id = l.id;
-      if (/^(label_city|label_town|label_village|label_state|label_country|label-place-|label-boundary|place_|label-street|roadname)/.test(id)) return;   // label-street/roadname added round 33: basemap road names are kept and banded by tuneRoadLabels instead of hidden   // label-place-/label-boundary added round 31: Versatiles hyphenates its place ids (label-place-city), so the app's underscore keep-list silently hid EVERY place label in the day style
+      if (/^(label_city|label_town|label_village|label_state|label_country|label-place-|label-boundary|place_)/.test(id)) return;   // label-place-/label-boundary added round 31: Versatiles hyphenates its place ids (label-place-city), so the app's underscore keep-list silently hid EVERY place label in the day style
       if (/label/.test(id) || /^highway-name/.test(id) || /^roadname/.test(id) || /^watername/.test(id) || /^poi_/.test(id) || id === 'housenumber')
         gl.setLayoutProperty(id, 'visibility', 'none');
     });
@@ -267,6 +267,7 @@ function offsetLine(pts, m) {
 }
 
 const labelFeatures = [];
+const labelPointFeatures = [];
 const GEO = {};
 // Left/Right naming (Andrew, 2026-10-28): every street has ONE fixed
 // direction - south end to north end, or west end to east end for
@@ -304,8 +305,17 @@ names.forEach(n => {
   let li = (SPOT[n] ? SPOT[n][0] : -1);
   if (li < 0 || li >= segs.length) { li = 0; let bl = -1; segs.forEach((sg, j) => { const L = segLenM(sg); if (L > bl) { bl = L; li = j; } }); }
   labelFeatures.push({ type: 'Feature', properties: { name: n }, geometry: { type: 'LineString', coordinates: GJ(segs[li]) } });
+  // Round 34: a POINT anchor on the same segment at the SPOT fraction.
+  // Line-placed labels need the segment to fit the name on screen, so
+  // at Overview most short streets lost their labels entirely; point
+  // labels render regardless of segment length.
+  const seg = segs[li], fr = SPOT[n] ? SPOT[n][1] : 0.5;
+  let target = segLenM(seg) * fr, acc = 0, anchor = seg[seg.length - 1];
+  for (let k = 1; k < seg.length; k++) { const d = jDistM(seg[k - 1], seg[k]); if (acc + d >= target) { const t = d ? (target - acc) / d : 0; anchor = [seg[k - 1][0] + (seg[k][0] - seg[k - 1][0]) * t, seg[k - 1][1] + (seg[k][1] - seg[k - 1][1]) * t]; break; } acc += d; }
+  labelPointFeatures.push({ type: 'Feature', properties: { name: n, len: Math.round(segLenM(stitched)) }, geometry: { type: 'Point', coordinates: GJ([anchor])[0] } });
 });
 const LABELS = { type: 'FeatureCollection', features: labelFeatures };
+const LABELPTS = { type: 'FeatureCollection', features: labelPointFeatures };
 // ---- unified strands (Andrew, 2026-10-28): the route is painted as
 // STRANDS, not per-street pieces. Slices of the same colour that touch -
 // along a street OR across a junction, through straights and right turns -
@@ -1694,28 +1704,6 @@ function placeClass(id) {
   if (id.includes('place-suburb') || id.includes('place_suburb')) return 'suburb';
   return null;
 }
-// Round 33 (Andrew): basemap STREET names at Overview. Until now
-// glHideLabels silenced every basemap name layer, so off-route
-// streets were nameless until close zoom (and our own route labels
-// are drawn too small to read at 14.6). Now the basemap's road-name
-// layers (Versatiles label-street-*, CARTO roadname_*) are kept and
-// banded: big roads from 12.5, minor streets from 13.8 - so at
-// Overview every street is named, and they are gone again at region
-// zooms. Our own streetnames layer now starts at 16.2, so exactly
-// one label system is in charge at any zoom: the basemap below
-// working zoom, our placed labels at working/close zoom.
-function tuneRoadLabels() {
-  const layers = (map.getStyle() && map.getStyle().layers) || [];
-  for (const L of layers) {
-    if (L.type !== 'symbol') continue;
-    const id = L.id; let minZ = null;
-    if (id.startsWith('label-street-')) minZ = /(primary|secondary|tertiary|trunk)/.test(id) ? 12.5 : 13.8;
-    else if (id === 'roadname_major') minZ = 12.5;
-    else if (id === 'roadname_pri') minZ = 13;
-    else if (id === 'roadname_sec' || id === 'roadname_minor') minZ = 13.8;
-    if (minZ !== null) map.setLayerZoomRange(id, minZ, L.maxzoom || 24);
-  }
-}
 function tunePlaceLabels() {
   const layers = (map.getStyle() && map.getStyle().layers) || [];
   for (const L of layers) {
@@ -1729,7 +1717,6 @@ function tunePlaceLabels() {
 }
 function addStack() {
   tunePlaceLabels();
-  tuneRoadLabels();
   if (!map.getSource('centres')) {
     map.addSource('centres', { type: 'geojson', data: CUR.centres });
     map.addSource('bands', { type: 'geojson', data: CUR.bands });
@@ -1740,6 +1727,7 @@ function addStack() {
     map.addSource('selGlow', { type: 'geojson', data: buildSelGlow() });
     map.addSource('hit', { type: 'geojson', data: HIT });
     map.addSource('labels', { type: 'geojson', data: LABELS });
+    map.addSource('labelpts', { type: 'geojson', data: LABELPTS });
   }
   const before = firstSymbolId();
   const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer, before); };
@@ -1786,6 +1774,16 @@ function addStack() {
   add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- hit + labels (every treatment) ---
   add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
+  // Round 34 (Andrew): below 16.2 the route's names ride POINT labels
+  // at each street's SPOT anchor - they render even on short streets
+  // where a line-placed label cannot fit (at Overview only a couple
+  // of long streets used to get names). One label system per zoom:
+  // points below 16.2, the placed line labels from 16.2 up. Same
+  // layer in both modes, so day/night text sizes are identical by
+  // construction - the size mismatch he saw was the two basemaps' own
+  // road labels, which stay hidden (round 33's un-hiding reverted at
+  // his word: he wanted HIS route's names populated, not all names).
+  add({ id: 'streetnamespt', type: 'symbol', source: 'labelpts', maxzoom: 16.2, layout: { 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 13.5, 9.5, 14.6, 10.5, 16.2, 12], 'text-padding': 2, 'symbol-sort-key': ['-', ['get', 'len']], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.4 } });
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
     map.addLayer({ id: 'streetnames', type: 'symbol', source: 'labels', minzoom: 16.2, layout: { 'symbol-placement': 'line', 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 7.5, 16, 10.5, 18, 20], 'text-rotation-alignment': 'map', 'text-pitch-alignment': 'viewport' }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.4 } });
   }
@@ -2055,7 +2053,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r33-1242).
+// at build time (r34-1250).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
