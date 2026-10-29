@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r9-1947">
+<meta name="build" content="r10-2038">
 </head>
 <body>
 <div id="map"></div>
@@ -397,25 +397,41 @@ function throughOK(A, side, J, runPts) {
   const sideSign = Math.sign((XYOf(off)[0] - Vx[0]) * nA[0] + (XYOf(off)[1] - Vx[1]) * nA[1]);
   if (!sideSign) return false;
   const signsOf = pt => { const w = XYOf(pt); return [Math.sign((w[0] - Vx[0]) * nA[0] + (w[1] - Vx[1]) * nA[1]), Math.sign((w[0] - Vx[0]) * nB[0] + (w[1] - Vx[1]) * nB[1])]; };
-  // blocked by any other street's marked side arm on A's side half at V?
   const map = sharedVertexMap();
-  let blocked = false;
+  // Blocked by a RAW CROSSING (round 10): if this street's raw side line
+  // properly crosses another street's marked raw side line within 13 m
+  // of V at a point that is NOT their vetted corner, running through
+  // would paint an X. The half-plane arm test it replaces missed bending
+  // streets: Greenpark bends at Fifth and its line swings across Fifth's
+  // line 4 m past the vertex. A crossing AT the vetted corner is the
+  // join itself - the partner kerbs into it - and does not block.
+  const pairsNow = PAIRS_CUR || junctionPairs();
+  const offA = side === 0 ? GEO[A].off0 : GEO[A].off1;
+  let crossed = false;
   for (const E of (map[vKey] || [])) {
-    if (E.n === A || blocked) continue;
+    if (E.n === A || crossed) continue;
     const gD = GEO[E.n];
-    [0, 1].forEach(t => {
-      if (blocked) return;
-      gD.cuts.forEach((ab, ci) => {
-        if (blocked || !(E.vi >= ab[0] && E.vi <= ab[1])) return;
-        const bits = pieces[E.n][ci];
-        if (bits === 3 || !(bits & (1 << t))) return;
-        const idx2 = ab[0] === E.vi ? Math.min(ab[1], E.vi + 1) : Math.max(ab[0], E.vi - 1);
-        const pt = (t === 0 ? gD.off0 : gD.off1)[idx2];
-        if (signsOf(pt)[0] === sideSign) blocked = true;
-      });
+    [0, 1].forEach(tt => {
+      if (crossed) return;
+      const marked = gD.cuts.some((ab, ci) => (E.vi >= ab[0] && E.vi <= ab[1]) && pieces[E.n][ci] !== 3 && (pieces[E.n][ci] & (1 << tt)));
+      if (!marked) return;
+      const offD = tt === 0 ? gD.off0 : gD.off1;
+      const corners = (pairsNow[A + '|' + J.viA + '|' + side] || []).filter(pr => pr.n2 === E.n && pr.side2 === tt && pr.corner).map(pr => pr.corner);
+      for (let s1 = 0; s1 + 1 < offA.length && !crossed; s1++) {
+        if (ptSegM(V, offA[s1], offA[s1 + 1]) > 13) continue;
+        for (let s2 = 0; s2 + 1 < offD.length; s2++) {
+          if (ptSegM(V, offD[s2], offD[s2 + 1]) > 13) continue;
+          if (!segCross(offA[s1], offA[s1 + 1], offD[s2], offD[s2 + 1])) continue;
+          const X = lineHit(offA[s1], offA[s1 + 1], offD[s2], offD[s2 + 1]);
+          if (!X) continue;
+          if ([offA[s1], offA[s1 + 1], offD[s2], offD[s2 + 1]].some(pt => jDistM(X, pt) < 0.35)) continue;
+          if (corners.some(c => jDistM(X, c) < 0.5)) continue;
+          crossed = true;
+        }
+      }
     });
   }
-  if (blocked) return false;
+  if (crossed) return false;
   for (const seg of THROUGH_SEGS) {
     if (coordKey(seg.V) !== vKey) continue;
     // The same street+side asking again is the SAME line, not a rival:
@@ -434,6 +450,18 @@ function throughOK(A, side, J, runPts) {
 // corridor (within CORRIDOR metres of its centreline, near the junction)
 // is removed; the cut ends land exactly on the corridor boundary and are
 // tagged so mergeStrands can bridge them around the corner.
+// Two junction entries at the same point are the SAME physical road
+// when their crossing streets run the same way - the name-change case
+// (Fifth becomes Angie at Valeria): JUNC carries one entry per name,
+// each with its own frame, and clipping/granting twice under two
+// near-identical frames corrupts the first pass (round 10: the Fifth
+// frame's clip ate the whole Valeria arm the Angie frame had correctly
+// kerbed - the segment's exit crossing landed within centimetres of
+// its start and was deduped away). Cluster twins and act ONCE.
+function sameRoad(J1, J2) {
+  if (jDistM(J1.V, J2.V) >= 2) return false;
+  return Math.abs(J1.dB[0] * J2.dB[0] + J1.dB[1] * J2.dB[1]) > 0.95;
+}
 function clipOne(pc, J, R) {
   const Vx = XYOf(J.V), L = R / Math.max(J.sin, 0.42) + 9;
   const W = p => { const q = XYOf(p); return (q[0] - Vx[0]) * J.nB[0] + (q[1] - Vx[1]) * J.nB[1]; };
@@ -467,7 +495,19 @@ function clipOne(pc, J, R) {
         if (Math.abs(W(c)) < R) cr.push({ t, c });
       }
     });
-    cr.sort((x, y) => x.t - y.t).forEach(({ c }) => { if (coordKey(c) !== coordKey(aug[aug.length - 1])) aug.push(c); });
+    cr.sort((x, y) => x.t - y.t).forEach(({ c }) => {
+      const last = aug[aug.length - 1];
+      if (coordKey(c) === coordKey(last)) return;
+      if (jDistM(c, last) < 0.05) {
+        // An exit within centimetres of an INSIDE start point: the wall
+        // point must REPLACE the start, never be deduped away - dropping
+        // it starts the surviving piece at the next trace point, however
+        // far away that is (round 10: a whole 114 m arm vanished).
+        if (inside(last)) aug[aug.length - 1] = c;
+        return;
+      }
+      aug.push(c);
+    });
     if (coordKey(q) !== coordKey(aug[aug.length - 1])) aug.push(q);
   }
   const tag = { clip: J.B, vi: J.viA };
@@ -487,9 +527,9 @@ function clipPieces(piecesIn, A, R = CORRIDOR, skip = null) {
   let pieces = piecesIn;
   const seenCluster = [];
   for (const J of JUNC[A]) {
-    if (seenCluster.some(u => u.B === J.B && jDistM(u.V, J.V) < 2)) continue;   // double vertices at one crossing clip ONCE (round 9: re-clips re-tagged ends and broke pair matching)
+    if (seenCluster.some(u => sameRoad(u, J))) continue;   // one clip per physical road at a point: double vertices AND name-change twins (round 9/10)
     seenCluster.push(J);
-    if (skip && [...skip].some(u => u.B === J.B && jDistM(u.V, J.V) < 2)) continue;
+    if (skip && [...skip].some(u => (u.B === J.B && jDistM(u.V, J.V) < 2) || sameRoad(u, J))) continue;
     if (J.sin <= 0.42) continue;   // near-parallel traces run together (overlaps) - not crossings
     const out = [];
     for (const pc of pieces) out.push(...clipOne(pc, J, R));
@@ -514,10 +554,17 @@ function edgeRunSlices(n, side, marked) {
     const seenJ = [];
     for (const J of JUNC[n]) {
       if (J.sin <= 0.42) continue;
-      if (seenJ.some(u => u.B === J.B && jDistM(u.V, J.V) < 2)) continue;
+      if (seenJ.some(u => sameRoad(u, J))) continue;   // name-change twins share one verdict (frame + through + skip)
       seenJ.push(J);
       if (!run.pts.some(pt => jDistM(pt, J.V) < CORRIDOR + 5)) continue;   // the run does not reach this junction
-      if (throughOK(n, side, J, run.pts)) { skip.add(J); continue; }
+      // A through is only for a line marked on BOTH arms of the junction.
+      // A run that ENDS at the junction (a terminating street, or the last
+      // marked stretch) gets the kerb clip + corner bridge instead -
+      // round 10: Brownlee's line was granted a through at Mellings and
+      // its raw start point painted across Mellings' road (Andrew's
+      // phone, 2026-10-28).
+      const spansJ = GEO[n].cuts[run.firstIdx][0] < J.viA && J.viA < GEO[n].cuts[run.lastIdx][1];
+      if (spansJ && throughOK(n, side, J, run.pts)) { skip.add(J); continue; }
       // own-street band across the mouth: the stretch on the other arm of
       // THIS street at this junction is complete - its solid band fills
       // the junction, so this side line runs unclipped to the vertex and
@@ -684,6 +731,27 @@ function junctionPairs() {
       link(A, B, pts.length === 3 ? pts[1] : null);
     }
   });
+  // Canonicalize corners: corners at one junction that coincide (twin
+  // corners from double vertices or multiple pairings at triple
+  // junctions) snap to ONE point, so bridges land on the same spot
+  // instead of weaving crossings centimetres apart (Bayside x Malden x
+  // Cartwright, round 10).
+  {
+    const reps = new Map();
+    const repOf = (J, pt) => {
+      const key = coordKey(J);
+      if (!reps.has(key)) reps.set(key, []);
+      const list = reps.get(key);
+      for (const r of list) if (jDistM(r, pt) < 0.5) return r;
+      list.push(pt);
+      return pt;
+    };
+    Object.keys(pairs).forEach(k => {
+      const parts = k.split('|');
+      const J = GEO[parts[0]].stitched[+parts[1]];
+      pairs[k].forEach(pr => { if (pr.corner) pr.corner = repOf(J, pr.corner); });
+    });
+  }
   return pairs;
 }
 // Strand merging: join slices of one family whose ends touch (exact shared
@@ -727,8 +795,17 @@ function mergeStrands(slices, pairs) {
           const bStart = bo.pts[0];   // bo is oriented so its start carries the matching meta
           let bridge = null;
           const exclG = new Set([meta.n + '|' + meta.side, pr.n2 + '|' + pr.side2]);
-          if (pr.corner && !pathBadNear([aEnd, pr.corner, bStart], J) && !pathBadGreen([aEnd, pr.corner, bStart], J, exclG, pr.corner)) bridge = [pr.corner];
-          else if (!pathBadNear([aEnd, bStart], J) && !pathBadGreen([aEnd, bStart], J, exclG, null)) bridge = [];
+          if (pr.corner) {
+            // retrace both lines' own points to the corner where they
+            // exist; vet the RETRACED path (the actual paint), falling
+            // back to the plain corner path, then the chord
+            const rpA = rawPath(meta.n, meta.side, aEnd, pr.corner, J);
+            const rpB = rawPath(pr.n2, pr.side2, bStart, pr.corner, J);
+            const retraced = rpA && rpB ? rpA.concat([pr.corner], rpB.slice().reverse()) : null;
+            if (retraced && !pathBadNear([aEnd].concat(retraced, [bStart]), J) && !pathBadGreen([aEnd].concat(retraced, [bStart]), J, exclG, pr.corner)) bridge = retraced;
+            else if (!pathBadNear([aEnd, pr.corner, bStart], J) && !pathBadGreen([aEnd, pr.corner, bStart], J, exclG, pr.corner)) bridge = [pr.corner];
+          }
+          if (!bridge && !pathBadNear([aEnd, bStart], J) && !pathBadGreen([aEnd, bStart], J, exclG, null)) bridge = [];
           if (!bridge) return;
           if (atEnd) out.push({ score: 1, merged: { pts: a.pts.concat(bridge, bo.pts), key: a.key, mem: a.mem.concat(bo.mem), e0: a.e0, e1: bo.e1 } });
           else out.push({ score: 1, merged: { pts: [...bo.pts].reverse().concat(bridge.slice().reverse(), a.pts), key: a.key, mem: bo.mem.concat(a.mem), e0: bo.e1, e1: a.e1 } });
@@ -884,6 +961,7 @@ function extendIntoBands(edgeChains, pairs) {
   });
 }
 let LASTCHAINS = null;
+let PAIRS_CUR = null;   // the current build's junction pairs (throughOK reads them)
 // Last-resort connector (Andrew's rule, enforced literally): if a marked
 // side line still ends at a junction NOT joined to the marked geometry
 // beside it in its corner, join it to the nearest point of that geometry -
@@ -902,27 +980,73 @@ function lastResortConnect(edges, bands) {
     const J2 = (JUNC[B] || []).find(x => x.B === A && jDistM(x.V, V) < 2);
     return (J1 && J2) ? { nA: J2.nB, nB: J1.nB } : null;
   };
-  const compsOf = list => {
-    const parent = list.map((_, i) => i);
-    const find = x => parent[x] === x ? x : (parent[x] = find(parent[x]));
-    const onLine = (pt, c, thr) => { for (let s2 = 0; s2 + 1 < c.pts.length; s2++) if (ptSegM(pt, c.pts[s2], c.pts[s2 + 1]) < thr) return true; return false; };
-    const touch = (A, B, i, j) => {
-      const eA = [A.pts[0], A.pts[A.pts.length - 1]], eB = [B.pts[0], B.pts[B.pts.length - 1]];
-      if (eA.some(pt => eB.some(q => coordKey(pt) === coordKey(q)))) return true;
-      const thr = (i >= edges.length || j >= edges.length) ? 4.8 : 1.0;
-      return eA.some(pt => onLine(pt, B, thr)) || eB.some(pt => onLine(pt, A, thr));
-    };
-    list.forEach((A, i) => list.forEach((B, j) => { if (j > i && touch(A, B, i, j)) parent[find(i)] = find(j); }));
-    return list.map((_, i) => find(i));
-  };
   const properCross = (a, b, c, d) => {
     if (!segCross(a, b, c, d)) return false;
     const X = lineHit(a, b, c, d);
     return !!X && [a, b, c, d].every(pt => jDistM(X, pt) >= 0.35);
   };
+  // LOCAL connectivity at a junction - the same fragment rules gate12
+  // audits with, mirrored here so the mop-up and the audit agree. The
+  // global component test this replaces called an end "satisfied" when
+  // its chain touched the partner ANYWHERE on the route (round 10:
+  // Fifth's line touches the Marconi band at another junction, so its
+  // shy end at Marconi was never joined). Fragments are maximal runs
+  // within 15 m plus entry segments; same-chain fragments link only on
+  // a short hop - a route-long detour is not a connection at a corner.
+  const fragCache = new Map();
+  const localFrags = V => {
+    const key = coordKey(V);
+    if (fragCache.has(key)) return fragCache.get(key);
+    const all = edges.concat(bands);
+    const frags = [];
+    all.forEach((c, ci) => {
+      const band = ci >= edges.length;
+      let cur = null;
+      const close = () => { if (cur && cur.pts.length >= 1) frags.push(cur); cur = null; };
+      c.pts.forEach((p, pi) => {
+        if (jDistM(p, V) < 15) {
+          if (!cur) {
+            cur = { ci, band, pts: [] };
+            if (pi > 0 && ptSegM(V, c.pts[pi - 1], p) < 15) cur.pts.push(c.pts[pi - 1]);
+          }
+          cur.pts.push(p);
+        } else if (pi > 0 && ptSegM(V, c.pts[pi - 1], p) < 15) {
+          if (cur) { cur.pts.push(p); close(); }
+          else frags.push({ ci, band, pts: [c.pts[pi - 1], p] });
+        } else close();
+      });
+      close();
+    });
+    const parent = frags.map((_, i) => i);
+    const find = x => parent[x] === x ? x : (parent[x] = find(parent[x]));
+    const onLine = (p, f, thr) => { for (let s2 = 0; s2 + 1 < f.pts.length; s2++) if (ptSegM(p, f.pts[s2], f.pts[s2 + 1]) < thr) return true; return false; };
+    const touch = (A2, B2) => {
+      const eA = [A2.pts[0], A2.pts[A2.pts.length - 1]], eB = [B2.pts[0], B2.pts[B2.pts.length - 1]];
+      if (eA.some(p => eB.some(q => coordKey(p) === coordKey(q)))) return true;
+      const thr = (A2.band || B2.band) ? 4.8 : 1.0;
+      return eA.some(p => onLine(p, B2, thr)) || eB.some(p => onLine(p, A2, thr));
+    };
+    frags.forEach((A2, i) => frags.forEach((B2, j) => { if (j > i && touch(A2, B2)) parent[find(i)] = find(j); }));
+    const byChain = new Map();
+    frags.forEach((f, i) => { if (!byChain.has(f.ci)) byChain.set(f.ci, []); byChain.get(f.ci).push(i); });
+    byChain.forEach(idxs => {
+      for (let k = 0; k + 1 < idxs.length; k++) {
+        const A2 = frags[idxs[k]], B2 = frags[idxs[k + 1]];
+        const chain = all[A2.ci];
+        const ia = chain.pts.findIndex(p => coordKey(p) === coordKey(A2.pts[A2.pts.length - 1]));
+        const ib = chain.pts.findIndex(p => coordKey(p) === coordKey(B2.pts[0]));
+        if (ia < 0 || ib < 0 || ib <= ia) continue;
+        const mid = chain.pts.slice(ia + 1, ib);
+        if (mid.length <= 3 && mid.every(p => jDistM(p, V) <= 30) && ptSegM(V, A2.pts[A2.pts.length - 1], B2.pts[0]) <= 15) parent[find(idxs[k])] = find(idxs[k + 1]);
+      }
+    });
+    const out = { frags, comp: frags.map((_, i) => find(i)) };
+    fragCache.set(key, out);
+    return out;
+  };
   for (let round = 0; round < 60; round++) {
     const list = edges.concat(bands);
-    const comp = compsOf(list);
+    fragCache.clear();
     let acted = false;
     outer:
     for (const { V, streets } of jList) for (let ai = 0; ai < streets.length; ai++) for (let bi = ai + 1; bi < streets.length; bi++) {
@@ -948,9 +1072,14 @@ function lastResortConnect(edges, bands) {
         const quads = [];
         (sg[0] === 0 ? [1, -1] : [sg[0]]).forEach(sa => (sg[1] === 0 ? [1, -1] : [sg[1]]).forEach(sb => quads.push([sa, sb])));
         let satisfied = false, partners = [];
+        const LF = localFrags(V);
+        const myFrag = LF.frags.findIndex(f => f.ci === E.ci && (coordKey(f.pts[0]) === coordKey(E.pt) || coordKey(f.pts[f.pts.length - 1]) === coordKey(E.pt)));
         for (const q of quads) {
           partners = nearChains.filter(nc => nc.ci !== E.ci && nc.pn.some(pt => inQ(signs(pt), q)));
-          if (partners.some(nc => comp[nc.ci] === comp[E.ci])) { satisfied = true; break; }
+          if (myFrag >= 0 && partners.some(nc => LF.frags.some((f, fi) => f.ci === nc.ci && LF.comp[fi] === LF.comp[myFrag] && f.pts.some(pt => inQ(signs(pt), q))))) { satisfied = true; break; }
+          // its own chain, another fragment, carrying the other street -
+          // paint that is continuous through the corner within one chain
+          if (myFrag >= 0 && LF.frags.some((f, fi) => fi !== myFrag && LF.comp[fi] === LF.comp[myFrag] && list[f.ci].mem.some(m => m.n === (E.meta.n === A ? B : A)) && f.pts.some(pt => inQ(signs(pt), q)))) { satisfied = true; break; }
         }
         if (satisfied || !partners.length) continue;
         const cands = [];
@@ -969,13 +1098,26 @@ function lastResortConnect(edges, bands) {
         for (const cand of cands) {
           if (cand.d > 13 || cand.d < 0.3) continue;
           const seg = [E.pt, cand.np];
-          let badPath = ptSegM(V, seg[0], seg[1]) < 1.5;
+          // Passing through the junction CENTRE mid-segment cuts across
+          // the junction - vetoed. ENDING at the centre is different:
+          // when the partner is a completed band whose chain ends AT V,
+          // V is the only landing point there is (round 10: Angie x
+          // Conti, Fifth x Marconi, Dianawood x Wilshire, Valeria x
+          // Bell Harbour - all ends sat 6-7 m out, vetoed by their own
+          // landings).
+          let badPath = ptSegM(V, seg[0], seg[1]) < 1.5 && jDistM(cand.np, V) > 0.5;
           if (!badPath) for (const n2 of names) {
             const st = GEO[n2].stitched;
             for (let si = 0; si + 1 < st.length && !badPath; si++) {
               if (ptSegM(V, st[si], st[si + 1]) >= 13 || !segCross(seg[0], seg[1], st[si], st[si + 1])) continue;
               const X = lineHit(seg[0], seg[1], st[si], st[si + 1]);
-              if (!X || jDistM(X, V) > 6) badPath = true;
+              if (!X) continue;
+              // Landing ON the target's centreline is the join itself,
+              // not a crossing of the road (round 10: ends at band
+              // junctions - Angie x Conti, Fifth x Marconi - were vetoed
+              // by their own landing points, 6-7 m from V)
+              if (jDistM(X, cand.np) < 1.5) continue;
+              if (jDistM(X, V) > 6) badPath = true;
             }
           }
           if (badPath) continue;
@@ -998,9 +1140,98 @@ function lastResortConnect(edges, bands) {
     if (!acted) break;
   }
 }
+
+// Round 10: touch every junction slice end to its corner BEFORE strands
+// merge. mergeStrands can daisy-chain a slice into a mega-chain through
+// other junctions, consuming the ends the corner join needed - the join
+// then exists only via a route-long detour, which paints as a gap at the
+// corner itself (Mellings' north arm at Brownlee, Andrew's phone
+// 2026-10-28). Appending the vetted corner point to both partner slices'
+// ends makes them share an exact endpoint, so the merge joins them AT
+// the corner, first, before any daisy-chain can steal the ends.
+
+// The raw offset line's own points between two points that both lie on
+// it (a clip end and a corner), walking from fromPt toward toPt. Bridge
+// paths retraced along the line itself cannot cross another line
+// anywhere the raw lines do not (round 10: straight corner chords cut
+// across bending neighbours - Santa Barbara x Columbus).
+function rawPath(n, side, fromPt, toPt, V) {
+  const off = side === 0 ? GEO[n].off0 : GEO[n].off1;
+  let fi = -1;
+  for (let s2 = 0; s2 + 1 < off.length; s2++) if (ptSegM(fromPt, off[s2], off[s2 + 1]) < 0.05) { fi = s2; break; }
+  if (fi < 0) return null;
+  for (const dir of [1, -1]) {
+    const pts = [];
+    let k = dir === 1 ? fi + 1 : fi;
+    for (let step = 0; step < 40; step++) {
+      const p = off[k];
+      if (!p) break;
+      const segA = off[k - dir];
+      if (segA && ptSegM(toPt, segA, p) < 0.05) return pts;
+      if (jDistM(p, V) > 17) break;
+      pts.push(p);
+      k += dir;
+      if (k < 0 || k >= off.length) break;
+    }
+  }
+  return null;
+}
+function cornerTouchSlices(slices, pairs) {
+  const endKeys = new Set();
+  slices.forEach(sl => { [sl.e0, sl.e1].forEach(m => { if (m) endKeys.add(m.n + '|' + m.vi + '|' + m.side); }); });
+  const properX = (a, b, c, d) => { if (!segCross(a, b, c, d)) return false; const X = lineHit(a, b, c, d); return !!X && [a, b, c, d].every(pt => jDistM(X, pt) >= 0.35); };
+  slices.forEach(sl => {
+    [['e1', true], ['e0', false]].forEach(([key, atEnd]) => {
+      const meta = sl[key];
+      if (!meta) return;
+      const tried = new Set();
+      for (const pr of (pairs[meta.n + '|' + meta.vi + '|' + meta.side] || [])) {
+        if (!pr.corner || tried.has(coordKey(pr.corner))) continue;
+        tried.add(coordKey(pr.corner));
+        // Partner presence: the partner line is shown at this corner if
+        // a slice of it ENDS here - or if it runs THROUGH and the corner
+        // lies on the slice (a through line has no end at the junction:
+        // Bloomingdale x Valeria, round 10 - the first version required
+        // an end and skipped every terminating street at a through road).
+        const partnerShown = endKeys.has(pr.n2 + '|' + pr.vi2 + '|' + pr.side2) || slices.some(o => o !== sl && o.mem.some(m => m.n === pr.n2 && m.side === pr.side2) && o.pts.some((p, pi) => pi + 1 < o.pts.length && ptSegM(pr.corner, p, o.pts[pi + 1]) < 1.0));
+        if (!partnerShown) return;
+        const endPt = atEnd ? sl.pts[sl.pts.length - 1] : sl.pts[0];
+        const d = jDistM(endPt, pr.corner);
+        if (d < 0.05 || d > 12) return;
+        // vet: the short hop along this line to the corner must not
+        // properly cross another street's marked side line
+        const V = GEO[meta.n].stitched[meta.vi];
+        let bad = false;
+        for (const dn of names) {
+          if (dn === meta.n || dn === pr.n2) continue;
+          const gd = GEO[dn];
+          for (const t2 of [0, 1]) {
+            const marked = gd.cuts.some((ab, ci) => pieces[dn][ci] !== 3 && (pieces[dn][ci] & (1 << t2)) && ab.some(v => jDistM(gd.stitched[v], V) < 16));
+            if (!marked) continue;
+            const off = t2 === 0 ? gd.off0 : gd.off1;
+            for (let s2 = 0; s2 + 1 < off.length && !bad; s2++) {
+              if (ptSegM(V, off[s2], off[s2 + 1]) > 16) continue;
+              if (properX(endPt, pr.corner, off[s2], off[s2 + 1])) bad = true;
+            }
+          }
+          if (bad) break;
+        }
+        if (bad) return;
+        // Retrace the line's own clipped-away points up to the corner
+        // where they exist, so the hop follows the line instead of
+        // cutting a chord across whatever bends nearby.
+        const rp = rawPath(meta.n, meta.side, endPt, pr.corner, V);
+        const hop = rp && rp.length ? rp.concat([pr.corner]) : [pr.corner];
+        if (atEnd) sl.pts.push(...hop); else sl.pts.unshift(...hop.slice().reverse());
+        return;   // one corner touch per end
+      }
+    });
+  });
+}
 function buildFamilies() {
   THROUGH_SEGS = [];
   const pairs = junctionPairs();
+  PAIRS_CUR = pairs;
   const centreSlices = [], bandSlices = [], edgeSlices = [];
   names.forEach(n => {
     const g = GEO[n];
@@ -1016,6 +1247,7 @@ function buildFamilies() {
   });
   const centres = mergeStrands(centreSlices, null);
   const bands = mergeStrands(bandSlices, null);
+  cornerTouchSlices(edgeSlices, pairs);
   const edges = mergeStrands(edgeSlices, pairs);
   bridgeStragglers(edges, pairs);
   throughTouch(edges, pairs);
@@ -1091,32 +1323,32 @@ function addStack() {
   add(line('t0-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
   add(line('t0-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 1 }));
   // --- T1: integrated — the road surface itself carries the state ---
-  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': 1 }));
-  add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': 1 }));
-  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }));
-  add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
-  add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }));
+  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- T2: glow accent — basemap roads untouched, light instead of paint ---
-  add(line('t2-glow', 'centres', { 'line-color': ['get', 'colG'], 'line-width': 13, 'line-opacity': 1, 'line-blur': 8 }));
-  add(line('t2-core', 'centres', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 1 }));
-  add(line('t2-bandglow', 'bands', { 'line-color': ['get', 'colG'], 'line-width': BANDGLOW, 'line-opacity': 1, 'line-blur': 8 }));
-  add(line('t2-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
-  add(line('t2-edgeglow', 'edges', { 'line-color': ['get', 'colG'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 1 }));
-  add(line('t2-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 1 }));
+  add(line('t2-glow', 'centres', { 'line-color': ['get', 'colG'], 'line-width': 13, 'line-opacity': 1, 'line-blur': 8 }, { 'line-cap': 'butt' }));
+  add(line('t2-core', 'centres', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t2-bandglow', 'bands', { 'line-color': ['get', 'colG'], 'line-width': BANDGLOW, 'line-opacity': 1, 'line-blur': 8 }, { 'line-cap': 'butt' }));
+  add(line('t2-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t2-edgeglow', 'edges', { 'line-color': ['get', 'colG'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t2-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- selection overlay: the base spec redrawn in the VIBRANT colour -
   // identical widths and glow, so the only difference is the colour pop ---
   add(line('t0-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 1 }));
   add(line('t0-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
   add(line('t0-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 1 }));
-  add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }));
-  add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
-  add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }));
-  add(line('t2-selglow', 'sel', { 'line-color': ['get', 'colG'], 'line-width': 13, 'line-blur': 8, 'line-opacity': 1 }));
-  add(line('t2-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 1 }));
-  add(line('t2-selbandglow', 'selBand', { 'line-color': ['get', 'colG'], 'line-width': BANDGLOW, 'line-blur': 8, 'line-opacity': 1 }));
-  add(line('t2-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
-  add(line('t2-seleglow', 'selEdges', { 'line-color': ['get', 'colG'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 1 }));
-  add(line('t2-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 1 }));
+  add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t2-selglow', 'sel', { 'line-color': ['get', 'colG'], 'line-width': 13, 'line-blur': 8, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t2-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t2-selbandglow', 'selBand', { 'line-color': ['get', 'colG'], 'line-width': BANDGLOW, 'line-blur': 8, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t2-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t2-seleglow', 'selEdges', { 'line-color': ['get', 'colG'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t2-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- hit + labels (every treatment) ---
   add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
@@ -1233,7 +1465,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r9-1947).
+// at build time (r10-2038).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
