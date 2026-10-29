@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r31-1233">
+<meta name="build" content="r33-1242">
 </head>
 <body>
 <div id="map"></div>
@@ -66,7 +66,7 @@ function glHideLabels(gl) {
   try {
     gl.getStyle().layers.forEach(l => {
       const id = l.id;
-      if (/^(label_city|label_town|label_village|label_state|label_country|label-place-|label-boundary|place_)/.test(id)) return;   // label-place-/label-boundary added round 31: Versatiles hyphenates its place ids (label-place-city), so the app's underscore keep-list silently hid EVERY place label in the day style
+      if (/^(label_city|label_town|label_village|label_state|label_country|label-place-|label-boundary|place_|label-street|roadname)/.test(id)) return;   // label-street/roadname added round 33: basemap road names are kept and banded by tuneRoadLabels instead of hidden   // label-place-/label-boundary added round 31: Versatiles hyphenates its place ids (label-place-city), so the app's underscore keep-list silently hid EVERY place label in the day style
       if (/label/.test(id) || /^highway-name/.test(id) || /^roadname/.test(id) || /^watername/.test(id) || /^poi_/.test(id) || id === 'housenumber')
         gl.setLayoutProperty(id, 'visibility', 'none');
     });
@@ -1670,34 +1670,66 @@ function firstSymbolId() {
   const s = ls.find(l => l.type === 'symbol');
   return s ? s.id : undefined;
 }
-// Round 30 (Andrew): place-name tuning on the basemap. The vector
-// styles already carry every city/town/suburb name with zoom bands
-// and collision-based thinning (the Apple Maps behaviour); the stock
-// bands just don't fit his use - the day style drops cities at z14,
-// before his Overview (14.6), and neighbourhood clutter runs into
-// the working zooms. Tuning: cities/towns/villages/suburbs stay
-// visible through Overview and are gone by 15.5; neighbourhood,
-// quarter and hamlet layers are switched off entirely; the low-zoom
-// city DOT layers, country and state labels are untouched. Runs
-// inside addStack so it applies on first load and every Light/Dark
-// swap, to whichever style is active.
+// Rounds 30-32 (Andrew): place-name tuning on the basemap. The
+// vector styles already carry every place name with zoom bands and
+// population-sorted collision thinning (the Apple Maps behaviour);
+// the stock bands just didn't fit his use - the day style dropped
+// cities at z14, before his Overview (14.6). Round 30 capped every
+// class at 15.5 and hid the smallest classes; round 31 fixed the
+// hide-rule keep-list that had suppressed day place labels entirely
+// (see glHideLabels); round 32 answers his "populate more": the
+// small classes (suburb, quarter, neighbourhood, hamlet) are
+// admitted too, with EARLIER entry zooms, still capped at 15.5 so
+// the working view stays clean. Population priority in both styles
+// means bigger places win collisions first as space tightens.
+// Runs inside addStack: first load and every Light/Dark swap.
+const PLACE_EARLY = { suburb: 11, quarter: 12, neighbourhood: 12.5, hamlet: 11.5 };
+function placeClass(id) {
+  if (id.includes('neighbourhood') || id.includes('neighborhood')) return 'neighbourhood';
+  if (id.includes('quarter')) return 'quarter';
+  if (id.includes('hamlet')) return 'hamlet';
+  if (id.includes('place-city') || id.includes('place_city') || id.includes('capital')) return 'city';
+  if (id.includes('place-town') || id.includes('place_town')) return 'town';
+  if (id.includes('place-village') || id.includes('place_village')) return 'village';
+  if (id.includes('place-suburb') || id.includes('place_suburb')) return 'suburb';
+  return null;
+}
+// Round 33 (Andrew): basemap STREET names at Overview. Until now
+// glHideLabels silenced every basemap name layer, so off-route
+// streets were nameless until close zoom (and our own route labels
+// are drawn too small to read at 14.6). Now the basemap's road-name
+// layers (Versatiles label-street-*, CARTO roadname_*) are kept and
+// banded: big roads from 12.5, minor streets from 13.8 - so at
+// Overview every street is named, and they are gone again at region
+// zooms. Our own streetnames layer now starts at 16.2, so exactly
+// one label system is in charge at any zoom: the basemap below
+// working zoom, our placed labels at working/close zoom.
+function tuneRoadLabels() {
+  const layers = (map.getStyle() && map.getStyle().layers) || [];
+  for (const L of layers) {
+    if (L.type !== 'symbol') continue;
+    const id = L.id; let minZ = null;
+    if (id.startsWith('label-street-')) minZ = /(primary|secondary|tertiary|trunk)/.test(id) ? 12.5 : 13.8;
+    else if (id === 'roadname_major') minZ = 12.5;
+    else if (id === 'roadname_pri') minZ = 13;
+    else if (id === 'roadname_sec' || id === 'roadname_minor') minZ = 13.8;
+    if (minZ !== null) map.setLayerZoomRange(id, minZ, L.maxzoom || 24);
+  }
+}
 function tunePlaceLabels() {
   const layers = (map.getStyle() && map.getStyle().layers) || [];
   for (const L of layers) {
     if (L.type !== 'symbol') continue;
-    const id = L.id;
-    if (id.includes('dot')) continue;   // low-zoom city dots keep stock behaviour
-    const clutter = id.includes('neighbourhood') || id.includes('neighborhood') || id.includes('quarter') || id.includes('hamlet');
-    const city = id.includes('place-city') || id.includes('place_city') || id.includes('capital');
-    const town = id.includes('place-town') || id.includes('place_town');
-    const village = id.includes('place-village') || id.includes('place_village');
-    const suburb = id.includes('place-suburb') || id.includes('place_suburb');
-    if (clutter) { map.setLayoutProperty(id, 'visibility', 'none'); continue; }
-    if (city || town || village || suburb) map.setLayerZoomRange(id, L.minzoom || 0, 15.5);
+    const cls = placeClass(L.id);
+    if (!cls || L.id.includes('dot')) continue;   // low-zoom city dots keep stock behaviour
+    const early = PLACE_EARLY[cls];
+    const minZ = early !== undefined ? Math.min(L.minzoom || 0, early) : (L.minzoom || 0);
+    map.setLayerZoomRange(L.id, minZ, 15.5);
   }
 }
 function addStack() {
   tunePlaceLabels();
+  tuneRoadLabels();
   if (!map.getSource('centres')) {
     map.addSource('centres', { type: 'geojson', data: CUR.centres });
     map.addSource('bands', { type: 'geojson', data: CUR.bands });
@@ -1755,7 +1787,7 @@ function addStack() {
   // --- hit + labels (every treatment) ---
   add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
-    map.addLayer({ id: 'streetnames', type: 'symbol', source: 'labels', layout: { 'symbol-placement': 'line', 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 7.5, 16, 10.5, 18, 20], 'text-rotation-alignment': 'map', 'text-pitch-alignment': 'viewport' }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.4 } });
+    map.addLayer({ id: 'streetnames', type: 'symbol', source: 'labels', minzoom: 16.2, layout: { 'symbol-placement': 'line', 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 7.5, 16, 10.5, 18, 20], 'text-rotation-alignment': 'map', 'text-pitch-alignment': 'viewport' }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.4 } });
   }
   glHideLabels(map);
   applyStates();
@@ -2023,7 +2055,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r31-1233).
+// at build time (r33-1242).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
