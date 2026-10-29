@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r12-2117">
+<meta name="build" content="r13-2145">
 </head>
 <body>
 <div id="map"></div>
@@ -1226,6 +1226,81 @@ function cornerTouchSlices(slices, pairs) {
     });
   });
 }
+// ---- solid-paint end trims (Andrew, 2026-10-28, round 13): a wide
+// solid (centre surface, completed band, or the selection redraw of
+// one) ENDING at a junction must butt against the crossing street's
+// paint - its square end's corners must never poke past the crossing
+// street's far paint edge. The end is pulled back along its own street
+// until both corners sit inside every crossing street's paint strip.
+// Where the corners already sit inside (most junctions), nothing moves
+// and same-colour paint stays seamless.
+const SURF_HALF = 3.3, BAND_HALF = 4.8;   // geographic half-widths the GL paint curves track (surfW ~6.6 m, BANDW ~9.6 m at working zooms)
+function ptSegDistM(p, a, b) {
+  const P = XYOf(p), A = XYOf(a), B = XYOf(b);
+  const vx = B[0] - A[0], vy = B[1] - A[1], L2 = vx * vx + vy * vy || 1;
+  let t = ((P[0] - A[0]) * vx + (P[1] - A[1]) * vy) / L2; t = Math.max(0, Math.min(1, t));
+  return Math.hypot(P[0] - (A[0] + t * vx), P[1] - (A[1] + t * vy));
+}
+function distToStreetM(p, n) { const st = GEO[n].stitched; let d = 1e9; for (let i = 0; i < st.length - 1; i++) d = Math.min(d, ptSegDistM(p, st[i], st[i + 1])); return d; }
+function paintHalfAt(B, viB) { let h = SURF_HALF; GEO[B].cuts.forEach((ab, i) => { if ((ab[0] === viB || ab[1] === viB) && pieces[B][i] === 3) h = BAND_HALF; }); return h; }
+function splitSliceAt(pts, d, atStart) {
+  // -> { kept, tail }: kept = pts with the chosen end pulled back by d
+  // metres; tail = the pulled-back portion (cut point + the original
+  // end points), or null when nothing was pulled.
+  if (d <= 0.05 || pts.length < 2) return { kept: pts, tail: null };
+  const P = atStart ? pts : pts.slice().reverse();   // P[0] = the end being trimmed
+  let left = d; const keptRev = [], tailRev = [];
+  for (let i = 0; i < P.length - 1; i++) {
+    const a = P[i], b = P[i + 1], L = jDistM(a, b);
+    if (L <= left) { left -= L; tailRev.push(a); continue; }
+    const f = left / L;
+    const cut = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+    tailRev.push(a, cut);
+    keptRev.push(cut);
+    for (let j = i + 1; j < P.length; j++) keptRev.push(P[j]);
+    break;
+  }
+  if (keptRev.length < 2 || tailRev.length < 2) return { kept: pts, tail: null };
+  const rev = arr => atStart ? arr : arr.slice().reverse();
+  return { kept: rev(keptRev), tail: rev(tailRev) };
+}
+function endCorners(pts, atStart, half) {
+  const E = atStart ? pts[0] : pts[pts.length - 1];
+  if (!E) return [];
+  // inner reference point: walk inward past duplicate / near-duplicate
+  // vertices (junction points repeat in the traces - Velmar 33/34,
+  // Mellings 4/5) until a point at least 1 m away gives a true heading
+  let I = null;
+  const order = pts.map((_, i) => atStart ? i : pts.length - 1 - i);
+  for (const i of order.slice(1)) { if (jDistM(pts[i], E) >= 1) { I = pts[i]; break; } }
+  if (!I) I = atStart ? pts[pts.length - 1] : pts[0];
+  if (!I || I === E) return [];
+  const P = XYOf(E), Q = XYOf(I);
+  let dx = P[0] - Q[0], dy = P[1] - Q[1]; const m = Math.hypot(dx, dy) || 1; dx /= m; dy /= m;
+  return [[E[0] + (-dy * half) / MLAT, E[1] + (dx * half) / MLNG], [E[0] + (dy * half) / MLAT, E[1] + (-dx * half) / MLNG]];
+}
+function junctionEndTrim(n, vi, pts, atStart, ownHalf) {
+  const grp = sharedVertexMap()[coordKey(GEO[n].stitched[vi])];
+  if (!grp) return { kept: pts, tail: null };
+  const cons = [];
+  grp.filter(e => e.n !== n).forEach(e => cons.push({ B: e.n, bHalf: paintHalfAt(e.n, e.vi) }));
+  if (!cons.length) return { kept: pts, tail: null };
+  const violAt = cand => { const corners = endCorners(cand, atStart, ownHalf); let v = 0; cons.forEach(c => corners.forEach(cp => { v = Math.max(v, distToStreetM(cp, c.B) - c.bHalf); })); return v; };
+  if (violAt(pts) <= 0.10) return { kept: pts, tail: null };
+  for (let d = 0.25; d <= 6.001; d += 0.25) {
+    const s = splitSliceAt(pts, d, atStart);
+    if (!s.tail) break;
+    if (violAt(s.kept) <= 0.10) return s;
+  }
+  // No pullback satisfies every corner (a bent-junction wedge: the
+  // corner sits in the crook of the crossing street's bend and pulling
+  // straight back moves it away from that street's arms, never inside
+  // them). Pull back a fixed step; the caller runs the removed piece
+  // into the junction at surface width for bands, whose corners are
+  // the narrowest possible and cannot poke.
+  const s = splitSliceAt(pts, 2.5, atStart);
+  return s.tail ? s : { kept: pts, tail: null };
+}
 function buildFamilies() {
   THROUGH_SEGS = [];
   const pairs = junctionPairs();
@@ -1235,9 +1310,19 @@ function buildFamilies() {
     const g = GEO[n];
     g.cuts.forEach((ab, idx) => {
       const bits = pieces[n][idx];
-      const cPts = g.stitched.slice(ab[0], ab[1] + 1);
-      if (bits === 3) bandSlices.push({ pts: cPts, key: 'band', mem: [{ n, idx }], e0: null, e1: null });
-      else centreSlices.push({ pts: cPts, key: mute(colOf(n, bits)), mem: [{ n, idx }], e0: null, e1: null });
+      let cPts = g.stitched.slice(ab[0], ab[1] + 1);
+      const isBand = bits === 3;
+      const key = isBand ? 'band' : mute(colOf(n, bits));
+      const famKey = i => pieces[n][i] === 3 ? 'band' : mute(colOf(n, pieces[n][i]));
+      const ownHalf = isBand ? BAND_HALF : SURF_HALF;
+      // trim an end only where the paint actually ends there: the
+      // neighbouring cut is a different family/colour, or the street
+      // ends. A continuing family keeps its exact shared vertex, so
+      // mergeStrands still joins it seamlessly.
+      if (idx === 0 || famKey(idx - 1) !== key) { const r = junctionEndTrim(n, ab[0], cPts, true, ownHalf); cPts = r.kept; if (isBand && r.tail) centreSlices.push({ pts: r.tail, key: mute(colOf(n, 3)), mem: [], e0: null, e1: null }); }
+      if (idx === g.cuts.length - 1 || famKey(idx + 1) !== key) { const r = junctionEndTrim(n, ab[1], cPts, false, ownHalf); cPts = r.kept; if (isBand && r.tail) centreSlices.push({ pts: r.tail, key: mute(colOf(n, 3)), mem: [], e0: null, e1: null }); }
+      if (isBand) bandSlices.push({ pts: cPts, key: 'band', mem: [{ n, idx }], e0: null, e1: null });
+      else centreSlices.push({ pts: cPts, key, mem: [{ n, idx }], e0: null, e1: null });
     });
     [0, 1].forEach(side => {
       edgeRunSlices(n, side, idx => pieces[n][idx] !== 3 && (pieces[n][idx] & (1 << side))).forEach(sl => edgeSlices.push(sl));
@@ -1267,9 +1352,15 @@ function buildSelC() {   // the selected sector's core: a vibrant BAND when comp
   const none = { type: 'FeatureCollection', features: [] };
   if (!sel) return { sel: none, selBand: none };
   const g = GEO[sel.name], ab = g.cuts[sel.idx], bits = pieces[sel.name][sel.idx];
-  const f = { type: 'Feature', properties: { col: colOf(sel.name, bits), colG: mute(colOf(sel.name, bits)) }, geometry: { type: 'LineString', coordinates: GJ(g.stitched.slice(ab[0], ab[1] + 1)) } };
+  let sPts = g.stitched.slice(ab[0], ab[1] + 1);
+  const sHalf = bits === 3 ? BAND_HALF : SURF_HALF;
+  const tails = [];
+  { const r = junctionEndTrim(sel.name, ab[0], sPts, true, sHalf); sPts = r.kept; if (bits === 3 && r.tail) tails.push(r.tail); }
+  { const r = junctionEndTrim(sel.name, ab[1], sPts, false, sHalf); sPts = r.kept; if (bits === 3 && r.tail) tails.push(r.tail); }
+  const f = { type: 'Feature', properties: { col: colOf(sel.name, bits), colG: mute(colOf(sel.name, bits)) }, geometry: { type: 'LineString', coordinates: GJ(sPts) } };
   const one = { type: 'FeatureCollection', features: [f] };
-  return bits === 3 ? { sel: none, selBand: one } : { sel: one, selBand: none };
+  if (bits === 3) return { sel: { type: 'FeatureCollection', features: tails.map(tp => ({ type: 'Feature', properties: { col: colOf(sel.name, bits), colG: mute(colOf(sel.name, bits)) }, geometry: { type: 'LineString', coordinates: GJ(tp) } })) }, selBand: one };
+  return { sel: one, selBand: none };
 }
 const HIT = { type: 'FeatureCollection', features: names.flatMap(n => GEO[n].cuts.map((ab, i) => ({ type: 'Feature', properties: { name: n, idx: i }, geometry: { type: 'LineString', coordinates: GJ(GEO[n].stitched.slice(ab[0], ab[1] + 1)) } }))) };
 let CUR = null;
@@ -1512,7 +1603,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r12-2117).
+// at build time (r13-2145).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
