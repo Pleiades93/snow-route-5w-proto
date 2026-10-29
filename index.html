@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r19-0940">
+<meta name="build" content="r20-0946">
 </head>
 <body>
 <div id="map"></div>
@@ -47,6 +47,9 @@
     <button id="sideA" disabled>Left</button><button id="sideB" disabled>Right</button>
     <button id="streetDone" disabled>Street done</button><button id="streetReset" disabled>Reset street</button>
     <button id="panelHide" style="margin-left:auto">Hide panel ▾</button><button class="updBtn" style="margin-left:8px">⟳ Update</button>
+  </div>
+  <div class="row"><span class="lab">Glow</span>
+    <button data-glow="0" class="on">Bloom</button><button data-glow="1">Soft</button><button data-glow="2">Hot core</button><button data-glow="3">Lit road</button>
   </div>
   </div>
 <button id="panelShow" class="chip">⚙ Controls</button>
@@ -1616,6 +1619,12 @@ const BANDW = ['interpolate', ['linear'], ['zoom'], 15, 3, 16, 6, 17, 11, 18, 22
 const BANDGLOW = ['interpolate', ['linear'], ['zoom'], 15, 10, 16, 14, 17, 20, 18, 32, 19, 56];
 const BANDCASE = ['interpolate', ['linear'], ['zoom'], 15, 5.5, 16, 9, 17, 15, 18, 27, 19, 50];
 const wPlus = (curve, d) => curve.map((v, i) => (i >= 4 && i % 2 === 0) ? v + d : v);   // widen an interpolate width curve by d px at every stop (widths sit at even indices >= 4)
+const wScale = (curve, f) => curve.map((v, i) => (i >= 4 && i % 2 === 0) ? v * f : v);   // scale an interpolate width curve (same index rule as wPlus)
+function lighten(hex, f) {   // mix a #rrggbb colour toward white by f (0..1) - the "hot core" colours for the glow presets
+  const n = parseInt(hex.slice(1), 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const m = c => Math.round(c + (255 - c) * f);
+  return '#' + [m(r), m(g), m(b)].map(c => c.toString(16).padStart(2, '0')).join('');
+}
 let map = null, treatment = 1, baseMode = 'day', fontStack = ['Noto Sans Regular'];
 
 function firstSymbolId() {
@@ -1650,6 +1659,10 @@ function addStack() {
   // breathes them with the overlay so the street itself lights up.
   // The ONLY selection treatment - the round-14 style toggle
   // buttons are removed. ---
+  add(line('sel-glow4-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 30), 'line-opacity': 0.05, 'line-blur': 14 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow4-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 30), 'line-opacity': 0.05, 'line-blur': 14 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
+  add(line('sel-glow5-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 23), 'line-opacity': 0.06, 'line-blur': 10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow5-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 23), 'line-opacity': 0.06, 'line-blur': 10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
   add(line('sel-glow1-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 17), 'line-opacity': 0.10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
   add(line('sel-glow1-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 17), 'line-opacity': 0.10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
   add(line('sel-glow2-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 9), 'line-opacity': 0.16 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
@@ -1660,6 +1673,8 @@ function addStack() {
   // identical widths and glow, so the only difference is the colour pop ---
   add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('sel-core-s', 'selGlow', { 'line-color': ['get', 'colHot'], 'line-width': wScale(surfW, 0.42), 'line-opacity': 0.85 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-core-b', 'selGlow', { 'line-color': ['get', 'colHot'], 'line-width': wScale(BANDW, 0.42), 'line-opacity': 0.85 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
   add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- hit + labels (every treatment) ---
   add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
@@ -1668,6 +1683,7 @@ function addStack() {
   }
   glHideLabels(map);
   applyStates();
+  applyGlow();
   setTreatment(treatment);
 }
 function setTreatment(t) {
@@ -1684,14 +1700,59 @@ let pulseTimer = null;
 function buildSelGlow() {
   const sg = selectedGeom();
   if (!sg) return EMPTYFC;
-  return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { col: colOf(sel.name, sg.bits), band: sg.bits === 3 ? 1 : 0 }, geometry: { type: 'LineString', coordinates: GJ(sg.pts) } }] };
+  const c = colOf(sel.name, sg.bits);
+  return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { col: c, colHot: lighten(c, 0.68), colLit: lighten(c, 0.30), band: sg.bits === 3 ? 1 : 0 }, geometry: { type: 'LineString', coordinates: GJ(sg.pts) } }] };
+}
+
+// ---- glow presets (round 20, Andrew: panel toggles to compare live;
+// SELECTION ONLY - no road paint is touched). Each preset is a set of
+// per-layer specs over one fixed stack: five falloff layers
+// (sel-glow1..5, widest = glow4) plus a core layer (sel-core) that can
+// draw a lightened colour over the vibrant redraw. Spec fields:
+// p = width-plus px, s = width scale, b = line-blur px, o = base
+// opacity, a = breathing amplitude, c = colour property for the core.
+// road = [base, amplitude] for the vibrant redraw's own breathing. ----
+let glowPreset = 0;
+let glowAnim = { op: {}, road: [0.74, 0.26] };
+const GLOW = [
+  { road: [0.74, 0.26], layers: {   // 0 Bloom - the round-16 look
+    'sel-glow1': { p: 17, b: 0, o: 0.10, a: 0.13 }, 'sel-glow2': { p: 9, b: 0, o: 0.16, a: 0.19 }, 'sel-glow3': { p: 4, b: 0, o: 0.24, a: 0.26 },
+    'sel-glow4': null, 'sel-glow5': null, 'sel-core': null } },
+  { road: [0.82, 0.18], layers: {   // 1 Soft - blurred photographic spill
+    'sel-glow1': { p: 17, b: 8, o: 0.07, a: 0.05 }, 'sel-glow2': { p: 9, b: 5, o: 0.10, a: 0.06 }, 'sel-glow3': { p: 4, b: 2, o: 0.16, a: 0.10 },
+    'sel-glow4': { p: 30, b: 14, o: 0.05, a: 0.03 }, 'sel-glow5': { p: 23, b: 10, o: 0.06, a: 0.04 }, 'sel-core': null } },
+  { road: [0.80, 0.20], layers: {   // 2 Hot core - near-white centre, coloured falloff
+    'sel-glow1': { p: 17, b: 0, o: 0.08, a: 0.08 }, 'sel-glow2': { p: 10, b: 0, o: 0.13, a: 0.12 }, 'sel-glow3': { p: 5, b: 0, o: 0.20, a: 0.16 },
+    'sel-glow4': null, 'sel-glow5': null, 'sel-core': { s: 0.42, b: 1.5, o: 0.85, a: 0.15, c: 'colHot' } } },
+  { road: [0.90, 0.10], layers: {   // 3 Lit road - the surface itself brightens, almost no halo
+    'sel-glow1': null, 'sel-glow2': null, 'sel-glow3': { p: 5, b: 0, o: 0.10, a: 0.04 },
+    'sel-glow4': null, 'sel-glow5': null, 'sel-core': { s: 1.0, b: 0, o: 0.38, a: 0.10, c: 'colLit' } } },
+];
+function applyGlow() {
+  const P = GLOW[glowPreset];
+  glowAnim = { op: {}, road: P.road };
+  if (typeof map === 'undefined' || !map || !map.getLayer) return;
+  Object.keys(P.layers).forEach(base => {
+    ['-s', '-b'].forEach(sfx => {
+      const id = base + sfx, L = P.layers[base];
+      if (!map.getLayer(id)) return;
+      map.setLayoutProperty(id, 'visibility', L ? 'visible' : 'none');
+      if (!L) return;
+      const curve = sfx === '-b' ? BANDW : surfW;
+      map.setPaintProperty(id, 'line-width', L.p !== undefined ? wPlus(curve, L.p) : wScale(curve, L.s));
+      map.setPaintProperty(id, 'line-blur', L.b || 0);
+      if (L.c) map.setPaintProperty(id, 'line-color', ['get', L.c]);
+      map.setPaintProperty(id, 'line-opacity', L.o);
+      glowAnim.op[id] = [L.o, L.a];
+    });
+  });
 }
 function managePulse() {
-  // The selection breathes (round 16, Andrew's spec): the glow
-  // stack and the vibrant redraw pulse TOGETHER in the street's
-  // own colour, so the selected stretch looks lit from within -
-  // not outlined, not bordered. Runs only while a stretch is
-  // selected.
+  // The selection breathes in the street's OWN colour (round 16,
+  // Andrew's spec): the glow stack and the vibrant redraw pulse
+  // together so the selected stretch looks lit from within. The
+  // glow preset (round 20) supplies the per-layer base opacity and
+  // breathing amplitude via glowAnim; this loop is preset-blind.
   const want = !!sel && !!(typeof map !== 'undefined' && map && map.getLayer && map.getLayer('sel-glow1-s'));
   if (want && !pulseTimer) {
     let ph = 0;
@@ -1700,10 +1761,8 @@ function managePulse() {
       ph += 0.09;
       const s = 0.5 + 0.5 * Math.sin(ph);   // 0..1 breathing cycle
       const set = (id, v) => { if (map.getLayer(id)) map.setPaintProperty(id, 'line-opacity', v); };
-      set('sel-glow1-s', 0.04 + 0.13 * s); set('sel-glow1-b', 0.04 + 0.13 * s);
-      set('sel-glow2-s', 0.06 + 0.19 * s); set('sel-glow2-b', 0.06 + 0.19 * s);
-      set('sel-glow3-s', 0.10 + 0.26 * s); set('sel-glow3-b', 0.10 + 0.26 * s);
-      set('t1-sel', 0.74 + 0.26 * s); set('t1-selband', 0.74 + 0.26 * s);
+      Object.keys(glowAnim.op).forEach(id => set(id, glowAnim.op[id][0] + glowAnim.op[id][1] * s));
+      set('t1-sel', glowAnim.road[0] + glowAnim.road[1] * s); set('t1-selband', glowAnim.road[0] + glowAnim.road[1] * s);
     }, 50);
   } else if (!want && pulseTimer) { clearInterval(pulseTimer); pulseTimer = null; }
 }
@@ -1849,6 +1908,7 @@ document.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click'
   const z = +b.dataset.zoom;
   if (reducedMotion) map.jumpTo({ center: CENTRE, zoom: z }); else map.flyTo({ center: CENTRE, zoom: z, duration: 650 });
 }));
+document.querySelectorAll('[data-glow]').forEach(b => b.addEventListener('click', () => { glowPreset = +b.dataset.glow; document.querySelectorAll('[data-glow]').forEach(x => x.classList.toggle('on', x === b)); applyGlow(); }));
 document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('[data-preset]').forEach(x => x.classList.toggle('on', x === b));
   if (b.dataset.preset === 'fresh') { pieces = freshPieces(); sel = null; }
@@ -1867,7 +1927,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r19-0940).
+// at build time (r20-0946).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
