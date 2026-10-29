@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r35-1259">
+<meta name="build" content="r36-1304">
 </head>
 <body>
 <div id="map"></div>
@@ -1818,7 +1818,7 @@ function addStack() {
   add({ id: 'routepoi-ring', type: 'circle', source: 'routepoi', maxzoom: 13.5, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 7, 13.5, 9], 'circle-color': '#ffffff', 'circle-opacity': 0.95 } });
   add({ id: 'routepoi-dot', type: 'circle', source: 'routepoi', maxzoom: 13.5, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4.5, 13.5, 6.5], 'circle-color': '#ef476f' } });
   add({ id: 'routepoi-txt', type: 'symbol', source: 'routepoi', maxzoom: 13.5, layout: { 'text-field': 'Route 5W', 'text-font': fontStack, 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1.1, 0], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.6 } });
-  ['t1-casing', 't1-casingb', 't1-surface', 't1-band', 't1-edge', 't1-sel', 't1-selband', 't1-sele', 'sel-core-s', 'sel-core-b', 'hit'].concat([1, 2, 3, 4, 5].flatMap(i => ['sel-glow' + i + '-s', 'sel-glow' + i + '-b'])).forEach(id => { if (map.getLayer(id)) map.setLayerZoomRange(id, 0, 13.5); });
+  ['t1-casing', 't1-casingb', 't1-surface', 't1-band', 't1-edge', 't1-sel', 't1-selband', 't1-sele', 'sel-core-s', 'sel-core-b', 'hit'].concat([1, 2, 3, 4, 5].flatMap(i => ['sel-glow' + i + '-s', 'sel-glow' + i + '-b'])).forEach(id => { if (map.getLayer(id)) map.setLayerZoomRange(id, 13.5, 24); });
   glHideLabels(map);
   applyStates();
   applyGlow();
@@ -2085,7 +2085,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r35-1259).
+// at build time (r36-1304).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
