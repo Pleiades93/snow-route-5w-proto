@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r26-1138">
+<meta name="build" content="r27-1144">
 </head>
 <body>
 <div id="map"></div>
@@ -1608,7 +1608,6 @@ function applyMixed() {
 function applyFreshStart() { pieces = freshPieces(); sel = null; }   // round 22 (Andrew): the page opens with every road unfinished; Mixed stays available on its Scene button
 applyFreshStart();
 rebuildData();
-setScheme(2);   // METRO locked as Andrew's final palette (round 26) - gold #ffc233 / raspberry #ef476f / mint #06d6a0. Runs after the gate-prefix init, before the map paints, so the prototype opens in Metro; the other schemes stay dormant in SCHEMES.
 
 // ================= map & treatments =================
 // Background registry — SETTLED by Andrew 2026-10-28 (round 12):
@@ -1743,6 +1742,7 @@ const SCHEMES = [
 let schemeIdx = 0;
 function setScheme(i) { schemeIdx = i; const s = SCHEMES[i]; YELLOW = s.main; RED = s.road; GREEN = s.done; MUGREEN = mute(GREEN); }
 function applyScheme(i) { setScheme(i); applyStates(); }
+setScheme(2);   // METRO locked as Andrew's final palette (round 26/27) - gold #ffc233 / raspberry #ef476f / mint #06d6a0. MUST sit after the SCHEMES table above: r26 placed this call right after the init, ~120 lines before the table exists, and the resulting ReferenceError killed the whole script before the map could load. The map only paints via addStack/applyStates, which run after this point, so the prototype still opens in Metro.
 let glowPreset = 1;   // SOFT, locked as Andrew's final choice (round 21) - presets 0/2/3 remain in the table, dormant
 let glowAnim = { op: {}, road: [0.62, 0.38] };
 const PULSE_RATES = [0.04, 0.07, 0.11, 0.17];   // breathing phase step per 50ms tick: ~7.9s / ~4.5s / ~2.9s / ~1.9s per full cycle (round 21 panel comparison)
@@ -1959,7 +1959,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r26-1138).
+// at build time (r27-1144).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
