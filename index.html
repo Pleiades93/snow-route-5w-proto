@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r27-1144">
+<meta name="build" content="r28-1200">
 </head>
 <body>
 <div id="map"></div>
@@ -1671,22 +1671,28 @@ function addStack() {
   // breathes them with the overlay so the street itself lights up.
   // The ONLY selection treatment - the round-14 style toggle
   // buttons are removed. ---
-  add(line('sel-glow4-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 30), 'line-opacity': 0.05, 'line-blur': 14 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
-  add(line('sel-glow4-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 30), 'line-opacity': 0.05, 'line-blur': 14 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
-  add(line('sel-glow5-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 23), 'line-opacity': 0.06, 'line-blur': 10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
-  add(line('sel-glow5-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 23), 'line-opacity': 0.06, 'line-blur': 10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
-  add(line('sel-glow1-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 17), 'line-opacity': 0.10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
-  add(line('sel-glow1-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 17), 'line-opacity': 0.10 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
-  add(line('sel-glow2-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 9), 'line-opacity': 0.16 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
-  add(line('sel-glow2-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 9), 'line-opacity': 0.16 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
-  add(line('sel-glow3-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 4), 'line-opacity': 0.24 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
-  add(line('sel-glow3-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 4), 'line-opacity': 0.24 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
+  // Round 28 (Andrew): the SELECTION layers (glow stack, core, and
+  // the vibrant redraw) use ROUND line joins. With the default miter
+  // join, the wide glow layers threw a long triangular spike past
+  // every sharp corner (the "refracting" shard he reported); round
+  // joins wrap the corner in an arc so the blurred halo pools around
+  // the bend instead. Base road paint keeps its settled joins/caps.
+  add(line('sel-glow4-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 30), 'line-opacity': 0.05, 'line-blur': 14 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow4-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 30), 'line-opacity': 0.05, 'line-blur': 14 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 1]));
+  add(line('sel-glow5-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 23), 'line-opacity': 0.06, 'line-blur': 10 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow5-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 23), 'line-opacity': 0.06, 'line-blur': 10 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 1]));
+  add(line('sel-glow1-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 17), 'line-opacity': 0.10 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow1-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 17), 'line-opacity': 0.10 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 1]));
+  add(line('sel-glow2-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 9), 'line-opacity': 0.16 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow2-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 9), 'line-opacity': 0.16 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 1]));
+  add(line('sel-glow3-s', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(surfW, 4), 'line-opacity': 0.24 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-glow3-b', 'selGlow', { 'line-color': ['get', 'col'], 'line-width': wPlus(BANDW, 4), 'line-opacity': 0.24 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 1]));
   // --- selection overlay: the base spec redrawn in the VIBRANT colour -
   // identical widths and glow, so the only difference is the colour pop ---
-  add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('sel-core-s', 'selGlow', { 'line-color': ['get', 'colHot'], 'line-width': wScale(surfW, 0.42), 'line-opacity': 0.85 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 0]));
-  add(line('sel-core-b', 'selGlow', { 'line-color': ['get', 'colHot'], 'line-width': wScale(BANDW, 0.42), 'line-opacity': 0.85 }, { 'line-cap': 'butt' }, ['==', ['get', 'band'], 1]));
+  add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt', 'line-join': 'round' }));
+  add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt', 'line-join': 'round' }));
+  add(line('sel-core-s', 'selGlow', { 'line-color': ['get', 'colHot'], 'line-width': wScale(surfW, 0.42), 'line-opacity': 0.85 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 0]));
+  add(line('sel-core-b', 'selGlow', { 'line-color': ['get', 'colHot'], 'line-width': wScale(BANDW, 0.42), 'line-opacity': 0.85 }, { 'line-cap': 'butt', 'line-join': 'round' }, ['==', ['get', 'band'], 1]));
   add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- hit + labels (every treatment) ---
   add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
@@ -1959,7 +1965,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r27-1144).
+// at build time (r28-1200).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
