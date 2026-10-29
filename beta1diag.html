@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha384-7pCYVJqO0XQQ5QrTB0EbggcPNshuKSUYJohrZGZOR3oa9CHrelsOhUvv48VwhlvT' https://cdn.jsdelivr.net; style-src-elem 'sha384-3rA3TGvtqlFS2Yz81EXfmv+Wq4LRCovnkaPIZvZgCbRt5TzNjQXyBRsxyT6Lpa1c' https://cdn.jsdelivr.net; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: https://tiles.versatiles.org https://basemaps.cartocdn.com https://cdn.jsdelivr.net; connect-src 'self' https://tiles.versatiles.org https://basemaps.cartocdn.com https://cdn.jsdelivr.net; worker-src blob:; child-src blob:; font-src 'none'; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha384-ZTTnGhcZlm9QJVzLFrqqnWQ0LtxjY1xDgOoWKWdqxPBFjjJxxO/yRSUkRZrVKkrF' https://cdn.jsdelivr.net; style-src-elem 'sha384-3rA3TGvtqlFS2Yz81EXfmv+Wq4LRCovnkaPIZvZgCbRt5TzNjQXyBRsxyT6Lpa1c' https://cdn.jsdelivr.net; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: https://tiles.versatiles.org https://basemaps.cartocdn.com https://cdn.jsdelivr.net; connect-src 'self' https://tiles.versatiles.org https://basemaps.cartocdn.com https://cdn.jsdelivr.net; worker-src blob:; child-src blob:; font-src 'none'; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -556,7 +556,7 @@ let glStyleReady = false;
 map.on('load', () => {
   glOk = true; glStyleReady = true; noteMapState();
   glHideLabels(map);
-  if (window.GLP) window.GLP.init(map);   // GLP adds the route paint stack to the fresh GL map
+  if (window.GLP && !map.getSource('centres')) window.GLP.init(map);   // GLP adds the route paint stack to the fresh GL map (guard: never stack a style twice)
   addReferenceLayers(); addTrailLayers(); addGpsLayers(); pushGps(); drawTrail();
   refreshAll();
 });
@@ -568,9 +568,8 @@ map.on('error', (ev) => {
 setTimeout(() => { if (!glOk) { mapNoteArmed = true; noteMapState(); } }, 15000);
 function setBasemap() {   // day/night: swap the style on the ONE GL map; the load wiring above re-runs via style.load
   if (window.__b1) window.__b1.swaps++;
-  if (!glStyleReady) { if (window.__b1) window.__b1.errs.push('swap blocked: style not ready'); return; }
   map.setStyle(GL_STYLES[isNight() ? 'night' : 'day']);
-  map.once('style.load', () => { if (window.__b1) window.__b1.styleLoads++; try { glHideLabels(map); if (window.GLP) window.GLP.init(map); addReferenceLayers(); addTrailLayers(); addGpsLayers(); pushGps(); drawTrail(); refreshAll(); } catch (err) { if (window.__b1) window.__b1.errs.push('styleload: ' + (err && err.message)); } });
+  map.once('style.load', () => { if (window.__b1) window.__b1.styleLoads++; try { glHideLabels(map); if (window.GLP && !map.getSource('centres')) window.GLP.init(map); addReferenceLayers(); addTrailLayers(); addGpsLayers(); pushGps(); drawTrail(); refreshAll(); } catch (err) { if (window.__b1) window.__b1.errs.push('styleload: ' + (err && err.message)); } });
 }
 setBasemap();
 // Reference features (Beta 1: GL layers - the old Leaflet polylines/tooltip
@@ -877,11 +876,11 @@ map.on('click', (e) => {
   window.__b1.clicks++;
   try {
     if (Date.now() < swallowClickUntil) { window.__b1.last = 'swallowed'; return; }
-    const pt = tapPoint(e.point);
+    const pt = tapPoint(map.project([e.lngLat.lng, e.lngLat.lat]));
     const n = nearestStreet(pt);
     const st = n ? nearestStretch(n, pt) : null;
     window.__b1.last = 'pt ' + Math.round(pt.x) + ',' + Math.round(pt.y) + ' n=' + n + ' d=' + (st ? st.d.toFixed(1) : 'null');
-    if (st && st.d <= 14) selectStretch(n, st.idx, st.anchor);
+    if (st && st.d <= 16) selectStretch(n, st.idx, st.anchor);
     else deselect();
   } catch (err) { window.__b1.errs.push('click: ' + (err && err.message)); }
 });
@@ -4028,10 +4027,10 @@ function applyFlip() {
   refreshAll();
   if (flipped) {
     map.dragPan.disable(); map.touchZoomRotate.disable(); map.doubleClickZoom.disable();
-    map.scrollWheelZoom.disable(); if (map.keyboard) map.keyboard.disable();
+    map.scrollZoom.disable(); if (map.keyboard) map.keyboard.disable();
   } else {
     map.dragPan.enable(); map.touchZoomRotate.enable(); map.doubleClickZoom.enable();
-    map.scrollWheelZoom.enable(); if (map.keyboard) map.keyboard.enable();
+    map.scrollZoom.enable(); if (map.keyboard) map.keyboard.enable();
   }
 }
 flipBtn.addEventListener('click', () => {
