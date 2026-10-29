@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r23-1021">
+<meta name="build" content="r24-1033">
 </head>
 <body>
 <div id="map"></div>
@@ -47,9 +47,6 @@
     <button id="sideA" disabled>Left</button><button id="sideB" disabled>Right</button>
     <button id="streetDone" disabled>Street done</button><button id="streetReset" disabled>Reset street</button>
     <button id="panelHide" style="margin-left:auto">Hide panel ▾</button><button class="updBtn" style="margin-left:8px">⟳ Update</button>
-  </div>
-  <div class="row"><span class="lab">Pulse</span>
-    <button data-pulse="0">Slow</button><button data-pulse="1" class="on">Medium</button><button data-pulse="2">Fast</button><button data-pulse="3">Rapid</button>
   </div>
   </div>
 <button id="panelShow" class="chip">⚙ Controls</button>
@@ -1730,7 +1727,7 @@ function buildSelGlow() {
 let glowPreset = 1;   // SOFT, locked as Andrew's final choice (round 21) - presets 0/2/3 remain in the table, dormant
 let glowAnim = { op: {}, road: [0.62, 0.38] };
 const PULSE_RATES = [0.04, 0.07, 0.11, 0.17];   // breathing phase step per 50ms tick: ~7.9s / ~4.5s / ~2.9s / ~1.9s per full cycle (round 21 panel comparison)
-let pulseRate = PULSE_RATES[1];
+let pulseRate = PULSE_RATES[3];   // RAPID, locked as Andrew's final choice (round 24) - the Pulse row is removed
 const GLOW = [
   { road: [0.74, 0.26], layers: {   // 0 Bloom - the round-16 look
     'sel-glow1': { p: 17, b: 0, o: 0.10, a: 0.13 }, 'sel-glow2': { p: 9, b: 0, o: 0.16, a: 0.19 }, 'sel-glow3': { p: 4, b: 0, o: 0.24, a: 0.26 },
@@ -1925,7 +1922,6 @@ document.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click'
   const z = +b.dataset.zoom;
   if (reducedMotion) map.jumpTo({ center: CENTRE, zoom: z }); else map.flyTo({ center: CENTRE, zoom: z, duration: 650 });
 }));
-document.querySelectorAll('[data-pulse]').forEach(b => b.addEventListener('click', () => { pulseRate = PULSE_RATES[+b.dataset.pulse]; document.querySelectorAll('[data-pulse]').forEach(x => x.classList.toggle('on', x === b)); }));
 document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('[data-preset]').forEach(x => x.classList.toggle('on', x === b));
   if (b.dataset.preset === 'fresh') { pieces = freshPieces(); sel = null; }
@@ -1944,7 +1940,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r23-1021).
+// at build time (r24-1033).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
