@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r29-1211">
+<meta name="build" content="r30-1221">
 </head>
 <body>
 <div id="map"></div>
@@ -1670,7 +1670,34 @@ function firstSymbolId() {
   const s = ls.find(l => l.type === 'symbol');
   return s ? s.id : undefined;
 }
+// Round 30 (Andrew): place-name tuning on the basemap. The vector
+// styles already carry every city/town/suburb name with zoom bands
+// and collision-based thinning (the Apple Maps behaviour); the stock
+// bands just don't fit his use - the day style drops cities at z14,
+// before his Overview (14.6), and neighbourhood clutter runs into
+// the working zooms. Tuning: cities/towns/villages/suburbs stay
+// visible through Overview and are gone by 15.5; neighbourhood,
+// quarter and hamlet layers are switched off entirely; the low-zoom
+// city DOT layers, country and state labels are untouched. Runs
+// inside addStack so it applies on first load and every Light/Dark
+// swap, to whichever style is active.
+function tunePlaceLabels() {
+  const layers = (map.getStyle() && map.getStyle().layers) || [];
+  for (const L of layers) {
+    if (L.type !== 'symbol') continue;
+    const id = L.id;
+    if (id.includes('dot')) continue;   // low-zoom city dots keep stock behaviour
+    const clutter = id.includes('neighbourhood') || id.includes('neighborhood') || id.includes('quarter') || id.includes('hamlet');
+    const city = id.includes('place-city') || id.includes('place_city') || id.includes('capital');
+    const town = id.includes('place-town') || id.includes('place_town');
+    const village = id.includes('place-village') || id.includes('place_village');
+    const suburb = id.includes('place-suburb') || id.includes('place_suburb');
+    if (clutter) { map.setLayoutProperty(id, 'visibility', 'none'); continue; }
+    if (city || town || village || suburb) map.setLayerZoomRange(id, L.minzoom || 0, 15.5);
+  }
+}
 function addStack() {
+  tunePlaceLabels();
   if (!map.getSource('centres')) {
     map.addSource('centres', { type: 'geojson', data: CUR.centres });
     map.addSource('bands', { type: 'geojson', data: CUR.bands });
@@ -1996,7 +2023,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r29-1211).
+// at build time (r30-1221).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
