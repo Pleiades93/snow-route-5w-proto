@@ -19,7 +19,6 @@
   button { appearance: none; border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.08); color: #f2f4f8; font-size: 13px; padding: 6px 10px; border-radius: 8px; }
   button.on { background: #2f7cf6; border-color: #2f7cf6; color: #fff; font-weight: 600; }
   button:disabled { opacity: .38; }
-  #bgSel { flex: 1; min-width: 120px; appearance: none; border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.08); color: #f2f4f8; font-size: 13px; padding: 6px 8px; border-radius: 8px; }
   #status { font-size: 13px; min-height: 17px; }
   #status b { color: #ffd24a; }
   #nogl { display: none; top: 64px; left: 10px; right: 10px; background: #7a1f1f; }
@@ -28,35 +27,16 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r11-2058">
+<meta name="build" content="r12-2117">
 </head>
 <body>
 <div id="map"></div>
-<div id="title" class="chip"><button id="titleX" title="Hide">×</button><b>Route 5W — rendering prototype</b><br><span>Not the tracker. Tap a street, then mark its sides. Flip the background, houses and look to compare. Build <b id="buildLab">?</b></span></div>
+<div id="title" class="chip"><button id="titleX" title="Hide">×</button><b>Route 5W — rendering prototype</b><br><span>Not the tracker. Tap a street, then mark its sides. Settled look: Integrated, houses on — Colorful by day, Dark Matter by night. Build <b id="buildLab">?</b></span></div>
 <div id="nogl" class="chip">WebGL is unavailable in this browser, so the vector map can't draw here. Open this page on your phone instead.</div>
 <div id="panel" class="chip">
   <div id="status">Loading map…</div>
-  <div class="row"><span class="lab">Look</span>
-    <button data-treat="0">Current</button><button data-treat="1" class="on">Integrated</button><button data-treat="2">Glow</button>
-  </div>
-  <div class="row"><span class="lab">Base</span>
-    <select id="bgSel">
-      <optgroup label="Light">
-        <option value="ofm-positron" selected>Positron — OpenFreeMap</option>
-        <option value="ofm-bright">Bright — OpenFreeMap</option>
-        <option value="ofm-liberty">Liberty — OpenFreeMap</option>
-        <option value="carto-positron">Positron — CARTO</option>
-        <option value="carto-voyager">Voyager — CARTO</option>
-        <option value="vers-colorful">Colorful — Versatiles</option>
-        <option value="vers-graybeard">Graybeard — Versatiles</option>
-        <option value="vers-neutrino">Neutrino — Versatiles</option>
-      </optgroup>
-      <optgroup label="Dark">
-        <option value="carto-dark">Dark Matter — CARTO</option>
-        <option value="vers-eclipse">Eclipse — Versatiles</option>
-      </optgroup>
-    </select>
-    <button id="housesBtn" class="on">Houses</button><button id="muteBtn">Mute base</button>
+  <div class="row"><span class="lab">Mode</span>
+    <button data-mode="light" class="on">Light</button><button data-mode="dark">Dark</button>
   </div>
   <div class="row"><span class="lab">Zoom</span>
     <button data-zoom="14.6">Overview</button><button data-zoom="16.8">Working</button><button data-zoom="18.4">Close</button>
@@ -1310,23 +1290,17 @@ applyMixed();
 rebuildData();
 
 // ================= map & treatments =================
-// Background registry (round 11, Andrew: backgrounds + houses first).
-// Every entry verified live 2026-10-28: free, no key, and every style
-// carries a buildings layer the Houses toggle can reach. `dark` drives
-// baseMode, which only colours OUR casing + label text.
+// Background registry — SETTLED by Andrew 2026-10-28 (round 12):
+// Light = Versatiles Colorful, Dark = CARTO Dark Matter, houses always
+// ON, Integrated the only look. The style/look controls were removed
+// from the panel to free the space for future option buttons; only the
+// Light/Dark mode toggle remains. `dark` drives baseMode, which only
+// colours OUR casing + label text.
 const BGSTYLES = {
-  'ofm-positron': { url: 'https://tiles.openfreemap.org/styles/positron', dark: false },
-  'ofm-bright': { url: 'https://tiles.openfreemap.org/styles/bright', dark: false },
-  'ofm-liberty': { url: 'https://tiles.openfreemap.org/styles/liberty', dark: false },
-  'carto-positron': { url: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json', dark: false },
-  'carto-voyager': { url: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json', dark: false },
   'vers-colorful': { url: 'https://tiles.versatiles.org/styles/colorful/style.json', dark: false },
-  'vers-graybeard': { url: 'https://tiles.versatiles.org/styles/graybeard/style.json', dark: false },
-  'vers-neutrino': { url: 'https://tiles.versatiles.org/styles/neutrino/style.json', dark: false },
   'carto-dark': { url: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json', dark: true },
-  'vers-eclipse': { url: 'https://tiles.versatiles.org/styles/eclipse/style.json', dark: true },
 };
-let bgId = 'ofm-positron', housesOn = true, muteBase = false, baseOriginals = null, bldVis = null;
+let bgId = 'vers-colorful', housesOn = true, muteBase = false, baseOriginals = null, bldVis = null;
 const surfW = ['interpolate', ['linear'], ['zoom'], 14, 2.5, 16, 6.5, 17, 9.5, 18, 15, 19, 24];
 const BANDW = ['interpolate', ['linear'], ['zoom'], 15, 3, 16, 6, 17, 11, 18, 22, 19, 44];       // ~9.6 m of road width, tracking the geographic side offsets
 const BANDGLOW = ['interpolate', ['linear'], ['zoom'], 15, 10, 16, 14, 17, 20, 18, 32, 19, 56];
@@ -1352,37 +1326,17 @@ function addStack() {
   const before = firstSymbolId();
   const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer, before); };
   const line = (id, source, paint, layout, filter) => { const o = { id, type: 'line', source, layout: Object.assign({ 'line-cap': 'round', 'line-join': 'miter' }, layout || {}), paint }; if (filter) o.filter = filter; return o; };   // NOTE: a present-but-undefined `filter` key makes MapLibre silently drop the layer (found by the QA tour, 2026-10-28)
-  // --- T0: the current tracker look, reproduced in GL (the control) ---
-  add(line('t0-centre', 'centres', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 1 }));
-  add(line('t0-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
-  add(line('t0-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 1 }));
   // --- T1: integrated — the road surface itself carries the state ---
   add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  // --- T2: glow accent — basemap roads untouched, light instead of paint ---
-  add(line('t2-glow', 'centres', { 'line-color': ['get', 'colG'], 'line-width': 13, 'line-opacity': 1, 'line-blur': 8 }, { 'line-cap': 'butt' }));
-  add(line('t2-core', 'centres', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t2-bandglow', 'bands', { 'line-color': ['get', 'colG'], 'line-width': BANDGLOW, 'line-opacity': 1, 'line-blur': 8 }, { 'line-cap': 'butt' }));
-  add(line('t2-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t2-edgeglow', 'edges', { 'line-color': ['get', 'colG'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t2-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- selection overlay: the base spec redrawn in the VIBRANT colour -
   // identical widths and glow, so the only difference is the colour pop ---
-  add(line('t0-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 19, 7], 'line-opacity': 1 }));
-  add(line('t0-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }));
-  add(line('t0-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.5, 'line-opacity': 1 }));
   add(line('t1-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t2-selglow', 'sel', { 'line-color': ['get', 'colG'], 'line-width': 13, 'line-blur': 8, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t2-sel', 'sel', { 'line-color': ['get', 'col'], 'line-width': 3.4, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t2-selbandglow', 'selBand', { 'line-color': ['get', 'colG'], 'line-width': BANDGLOW, 'line-blur': 8, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t2-selband', 'selBand', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t2-seleglow', 'selEdges', { 'line-color': ['get', 'colG'], 'line-width': 10, 'line-blur': 6, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t2-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3.2, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- hit + labels (every treatment) ---
   add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
@@ -1457,7 +1411,6 @@ function init() {
     else if (sel) { sel = null; applyStates(); }   // tap anywhere else deselects, like the tracker
   });
 }
-document.querySelectorAll('[data-treat]').forEach(b => b.addEventListener('click', () => setTreatment(+b.dataset.treat)));
 // --- background effects: houses + mute, re-applied after every swap ---
 const OURS = id => /^(t0|t1|t2)-/.test(id) || id === 'hit' || id === 'streetnames';
 // Desaturate one CSS colour (hex / rgb(a) / hsl(a)) toward grey, keeping
@@ -1532,9 +1485,10 @@ function setBackground(id) {
   map.on('styledata', waiter); waiter();
   setTimeout(() => { if (!done && !map.getSource('centres')) { done = true; pickFont(); addStack(); applyBaseFx(); } }, 12000);
 }
-document.getElementById('bgSel').addEventListener('change', e => setBackground(e.target.value));
-document.getElementById('housesBtn').addEventListener('click', () => { housesOn = !housesOn; document.getElementById('housesBtn').classList.toggle('on', housesOn); applyBaseFx(); });
-document.getElementById('muteBtn').addEventListener('click', () => { muteBase = !muteBase; document.getElementById('muteBtn').classList.toggle('on', muteBase); applyBaseFx(); });
+document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('on', x === b));
+  setBackground(b.dataset.mode === 'dark' ? 'carto-dark' : 'vers-colorful');
+}));
 document.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => {
   if (!map) return;
   const z = +b.dataset.zoom;
@@ -1558,7 +1512,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r11-2058).
+// at build time (r12-2117).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
