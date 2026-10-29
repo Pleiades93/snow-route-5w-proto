@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r30-1221">
+<meta name="build" content="r31-1233">
 </head>
 <body>
 <div id="map"></div>
@@ -66,7 +66,7 @@ function glHideLabels(gl) {
   try {
     gl.getStyle().layers.forEach(l => {
       const id = l.id;
-      if (/^(label_city|label_town|label_village|label_state|label_country|place_)/.test(id)) return;
+      if (/^(label_city|label_town|label_village|label_state|label_country|label-place-|label-boundary|place_)/.test(id)) return;   // label-place-/label-boundary added round 31: Versatiles hyphenates its place ids (label-place-city), so the app's underscore keep-list silently hid EVERY place label in the day style
       if (/label/.test(id) || /^highway-name/.test(id) || /^roadname/.test(id) || /^watername/.test(id) || /^poi_/.test(id) || id === 'housenumber')
         gl.setLayoutProperty(id, 'visibility', 'none');
     });
@@ -2023,7 +2023,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r30-1221).
+// at build time (r31-1233).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
