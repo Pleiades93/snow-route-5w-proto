@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r21-0959">
+<meta name="build" content="r22-1010">
 </head>
 <body>
 <div id="map"></div>
@@ -41,7 +41,7 @@
   <div class="row"><span class="lab">Zoom</span>
     <button data-zoom="14.6">Overview</button><button data-zoom="16.8">Working</button><button data-zoom="18.4">Close</button>
     <span class="lab" style="width:auto;margin-left:6px">Scene</span>
-    <button data-preset="fresh">Fresh</button><button data-preset="mixed" class="on">Mixed day</button><button data-preset="done">All done</button>
+    <button data-preset="fresh" class="on">Fresh</button><button data-preset="mixed">Mixed day</button><button data-preset="done">All done</button>
   </div>
   <div class="row"><span class="lab">Selected</span>
     <button id="sideA" disabled>Left</button><button id="sideB" disabled>Right</button>
@@ -1608,7 +1608,8 @@ function applyMixed() {
   set('Dianawood', 2, 1); set('Fifth', 0, 2); set('Blackburn', 3, 3); set('Blackburn', 4, 1);
   sel = { name: 'Velmar', idx: 6 };
 }
-applyMixed();
+function applyFreshStart() { pieces = freshPieces(); sel = null; }   // round 22 (Andrew): the page opens with every road unfinished; Mixed stays available on its Scene button
+applyFreshStart();
 rebuildData();
 
 // ================= map & treatments =================
@@ -1657,18 +1658,16 @@ function addStack() {
   const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer, before); };
   const line = (id, source, paint, layout, filter) => { const o = { id, type: 'line', source, layout: Object.assign({ 'line-cap': 'round', 'line-join': 'miter' }, layout || {}), paint }; if (filter) o.filter = filter; return o; };   // NOTE: a present-but-undefined `filter` key makes MapLibre silently drop the layer (found by the QA tour, 2026-10-28)
   // --- T1: integrated — the road surface itself carries the state ---
-  // Paint-order stack (round 21, Andrew's rule): the completed
-  // (green) family - band casing, band, side edges - renders BELOW
-  // all unfinished centre paint, and centre features are sorted
-  // red-then-yellow in rebuildData, so yellow is always on top.
-  // Every street dives under the higher-priority colour at a
-  // junction, which is what makes the butt illusion hold everywhere
-  // instead of depending on strand list order.
+  // Paint-order stack (round 22): the round-21 centres sort stays -
+  // RED strands paint before YELLOW in rebuildData, so red dives
+  // under yellow at junctions. The green (completed) family is back
+  // where it was before round 21 (Andrew: revert the green part) -
+  // band casing and band render above the unfinished centre paint.
+  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
+  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': 1 }, { 'line-cap': 'butt' }));
-  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- selection glow (round 16, restored onto the r15 paint at
   // Andrew's direction 2026-10-29): three nested widths in the
   // street's OWN colour under the vibrant redraw; managePulse
@@ -1945,7 +1944,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r21-0959).
+// at build time (r22-1010).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
