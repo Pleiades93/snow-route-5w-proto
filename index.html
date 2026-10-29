@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r37-1317">
+<meta name="build" content="r38-1327">
 </head>
 <body>
 <div id="map"></div>
@@ -1761,11 +1761,11 @@ function addStack() {
   // under yellow at junctions. The green (completed) family is back
   // where it was before round 21 (Andrew: revert the green part) -
   // band casing and band render above the unfinished centre paint.
-  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 0, 14.3, 1] }, { 'line-cap': 'butt' }));
-  add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 0, 14.3, 1] }, { 'line-cap': 'butt' }));
-  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 0, 14.3, 1] }, { 'line-cap': 'butt' }));
-  add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 0, 14.3, 1] }, { 'line-cap': 'butt' }));
-  add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 0, 14.3, 1] }, { 'line-cap': 'butt' }));
+  add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 0, 13.3, 1] }, { 'line-cap': 'butt' }));
+  add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 0, 13.3, 1] }, { 'line-cap': 'butt' }));
+  add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 0, 13.3, 1] }, { 'line-cap': 'butt' }));
+  add(line('t1-band', 'bands', { 'line-color': ['get', 'col'], 'line-width': BANDW, 'line-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 0, 13.3, 1] }, { 'line-cap': 'butt' }));
+  add(line('t1-edge', 'edges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 0, 13.3, 1] }, { 'line-cap': 'butt' }));
   // --- selection glow (round 16, restored onto the r15 paint at
   // Andrew's direction 2026-10-29): three nested widths in the
   // street's OWN colour under the vibrant redraw; managePulse
@@ -1810,19 +1810,21 @@ function addStack() {
   // that is what rescues Bloomingdale, whose neighbours sit ~23 px
   // away at Overview no matter where along its segment it anchors.
   if (!map.getLayer('streetnamespt')) {
-    map.addLayer({ id: 'streetnamespt', type: 'symbol', source: 'labelpts', minzoom: 13.6, maxzoom: 16.2, layout: { 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 10, 14.6, 10.5, 16.2, 12], 'text-padding': 1, 'text-variable-anchor': ['center', 'top', 'bottom', 'left', 'right'], 'text-radial-offset': 0.8, 'symbol-sort-key': ['-', ['get', 'len']], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 0, 14.3, 1], 'text-halo-width': 1.4 } });
+    map.addLayer({ id: 'streetnamespt', type: 'symbol', source: 'labelpts', minzoom: 12.6, maxzoom: 16.2, layout: { 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 10, 14.6, 10.5, 16.2, 12], 'text-padding': 1, 'text-variable-anchor': ['center', 'top', 'bottom', 'left', 'right'], 'text-radial-offset': 0.8, 'symbol-sort-key': ['-', ['get', 'len']], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 0, 13.3, 1], 'text-halo-width': 1.4 } });
   }
   // Round 35/37 (Andrew): zoomed far out, the route cluster blurs
-  // into a blob. ONE melt band, 13.6 to 14.3: the route paint and its
+  // into a blob. ONE melt band, 12.6 to 13.3 (r38: Andrew picked
+  // 'much later' of three offered bands - the route stays fully solid
+  // until the view is ~2.5x wider than Overview): the route paint and its
   // street names fade out together while the point of interest fades
   // in - no in-between state where the colours show without names
   // (his r37 correction: the staggered switches looked broken). Hard
-  // floors sit just outside the band (paint 13.5, names 13.6, POI
-  // capped 14.3) so fully-faded layers stop drawing / colliding.
-  add({ id: 'routepoi-ring', type: 'circle', source: 'routepoi', maxzoom: 14.3, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 7, 13.5, 9], 'circle-color': '#ffffff', 'circle-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 1, 14.3, 0] } });
-  add({ id: 'routepoi-dot', type: 'circle', source: 'routepoi', maxzoom: 14.3, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4.5, 13.5, 6.5], 'circle-color': '#ef476f', 'circle-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 1, 14.3, 0] } });
-  add({ id: 'routepoi-txt', type: 'symbol', source: 'routepoi', maxzoom: 14.3, layout: { 'text-field': 'Route 5W', 'text-font': fontStack, 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1.1, 0], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 1, 14.3, 0], 'text-halo-width': 1.6 } });
-  ['t1-casing', 't1-casingb', 't1-surface', 't1-band', 't1-edge', 't1-sel', 't1-selband', 't1-sele', 'sel-core-s', 'sel-core-b', 'hit'].concat([1, 2, 3, 4, 5].flatMap(i => ['sel-glow' + i + '-s', 'sel-glow' + i + '-b'])).forEach(id => { if (map.getLayer(id)) map.setLayerZoomRange(id, 13.5, 24); });
+  // floors sit just outside the band (paint 12.5, names 12.6, POI
+  // capped 13.3) so fully-faded layers stop drawing / colliding.
+  add({ id: 'routepoi-ring', type: 'circle', source: 'routepoi', maxzoom: 13.3, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 7, 13.5, 9], 'circle-color': '#ffffff', 'circle-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 1, 13.3, 0] } });
+  add({ id: 'routepoi-dot', type: 'circle', source: 'routepoi', maxzoom: 13.3, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4.5, 13.5, 6.5], 'circle-color': '#ef476f', 'circle-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 1, 13.3, 0] } });
+  add({ id: 'routepoi-txt', type: 'symbol', source: 'routepoi', maxzoom: 13.3, layout: { 'text-field': 'Route 5W', 'text-font': fontStack, 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1.1, 0], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-opacity': ['interpolate', ['linear'], ['zoom'], 12.6, 1, 13.3, 0], 'text-halo-width': 1.6 } });
+  ['t1-casing', 't1-casingb', 't1-surface', 't1-band', 't1-edge', 't1-sel', 't1-selband', 't1-sele', 'sel-core-s', 'sel-core-b', 'hit'].concat([1, 2, 3, 4, 5].flatMap(i => ['sel-glow' + i + '-s', 'sel-glow' + i + '-b'])).forEach(id => { if (map.getLayer(id)) map.setLayerZoomRange(id, 12.5, 24); });
   glHideLabels(map);
   applyStates();
   applyGlow();
@@ -2089,7 +2091,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r37-1317).
+// at build time (r38-1327).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
