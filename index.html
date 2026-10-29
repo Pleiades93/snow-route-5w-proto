@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r39-1334">
+<meta name="build" content="r41-1438">
 </head>
 <body>
 <div id="map"></div>
@@ -1497,7 +1497,19 @@ function clipEndAtJunction(n, vi, pts, atStart, ownHalf) {
       const Ex = [Ix[0] + t * dv[0], Ix[1] + t * dv[1]];
       const E = [Ex[1] / MLAT, Ex[0] / MLNG];   // new end point: ON the crossing street's near paint edge
       const L = 4;   // the final approach runs L metres along the edge's normal
-      const P = [(Ex[1] - cap.ny * L) / MLAT, (Ex[0] - cap.nx * L) / MLNG];
+      // ROUND 41 HYBRID (Andrew-approved trial): the corrected approach
+      // (PLUS - approach point on this street's own side) applies ONLY
+      // when the crossing street RUNS THROUGH the junction (an interior
+      // vertex there): its paint is continuous, so this strand can butt
+      // flush against its near edge. When the crossing street also ENDS
+      // at the junction, keep the ROUND 39 behaviour (MINUS): r40's
+      // oracle A/B proved the old overshoot is what covers the shared
+      // centre there - stopping short on both sides opens a hole
+      // (Fifth x Greenpark 104 m2, Columbus x Santa Barbara 90 m2).
+      const bSt = GEO[worst.J.B].stitched;
+      const bSpans = grp.filter(e => e.n === worst.J.B).some(e => e.vi > 0 && e.vi < bSt.length - 1);
+      const P = bSpans ? [(Ex[1] + cap.ny * L) / MLAT, (Ex[0] + cap.nx * L) / MLNG]
+                       : [(Ex[1] - cap.ny * L) / MLAT, (Ex[0] - cap.nx * L) / MLNG];
       const cumE = (1 - t) * Math.hypot(dv[0], dv[1]);
       // work in END-FIRST order (work[0] = the end being cut)
       // whichever end it is, build the new end-first array, then
@@ -2113,7 +2125,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r39-1334).
+// at build time (r41-1438).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
