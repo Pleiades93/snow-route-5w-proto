@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r17-0708">
+<meta name="build" content="r18-0810">
 </head>
 <body>
 <div id="map"></div>
@@ -1621,6 +1621,74 @@ function buildFamilies() {
   const fc = (list, colFn) => ({ type: 'FeatureCollection', features: list.map(sl => { const c = colFn(sl); return { type: 'Feature', properties: { col: c, colG: mute(c) }, geometry: { type: 'LineString', coordinates: GJ(sl.pts) } }; }) });
   return { centres: fc(centres, sl => sl.key), bands: fc(bands, () => MUGREEN), edges: fc(edges, () => MUGREEN) };
 }
+function buildPatches() {
+  // ROUND 18 — junction centre patches (the external audit's explicit
+  // polygon geometry for difficult junctions, verified by the
+  // independent oracle): filled corner quads UNDER the strands at
+  // every junction. Each quad [V, P1, X, P2] is bounded by two
+  // adjacent arms' near-edge lines — the corner region of the
+  // junction. Strands draw over the quads, so the only visible part
+  // is the part no strand covers: the centre hole that appears when
+  // both streets' strands end at the same junction (family changes
+  // on both — measured 44 m2 at Columbus x Santa Barbara in the
+  // both-change state) and the corner wedges at T-ends. Colour = the
+  // wider arm's rendered colour (a completed band beats a surface);
+  // ties take the first arm. Pairs are skipped when near-straight
+  // (>165 deg: the strands' own strips cover the corner) or
+  // near-parallel (<8 deg: strips overlap anyway).
+  const feats = [];
+  const sv = sharedVertexMap();
+  Object.keys(sv).forEach(k => {
+    const ents = sv[k];
+    if (new Set(ents.map(e => e.n)).size < 2) return;
+    const V = GEO[ents[0].n].stitched[ents[0].vi], Vx = XYOf(V);
+    const arms = [], seenA = new Set();
+    ents.forEach(e => {
+      const st = GEO[e.n].stitched, cuts = GEO[e.n].cuts;
+      [[-1, e.vi - 1], [1, e.vi]].forEach(([dir, seg]) => {
+        if (seg < 0 || seg >= st.length - 1) return;
+        let ci = -1;
+        for (let c = 0; c < cuts.length; c++) if (cuts[c][0] <= seg && seg < cuts[c][1]) { ci = c; break; }
+        if (ci < 0) return;
+        const id = e.n + '|' + dir + '|' + ci;
+        if (seenA.has(id)) return; seenA.add(id);
+        let u = null;
+        for (let t = e.vi + dir; t >= 0 && t < st.length; t += dir) {
+          const d = jDistM(st[t], V);
+          if (d >= 0.4) { const p = XYOf(st[t]); u = [(p[0] - Vx[0]) / d, (p[1] - Vx[1]) / d]; break; }
+        }
+        if (!u) return;
+        const bits = pieces[e.n][ci];
+        arms.push({ u, half: bits === 3 ? BAND_HALF : SURF_HALF, col: bits === 3 ? MUGREEN : mute(colOf(e.n, bits)) });
+      });
+    });
+    if (arms.length < 2) return;
+    const order = arms.map((a, i) => [Math.atan2(a.u[1], a.u[0]), i]).sort((x, y) => x[0] - y[0]).map(x => x[1]);
+    for (let t = 0; t < order.length; t++) {
+      const a1 = arms[order[t]], a2 = arms[order[(t + 1) % order.length]];
+      const dot = Math.max(-1, Math.min(1, a1.u[0] * a2.u[0] + a1.u[1] * a2.u[1]));
+      const ang = Math.acos(dot) * 180 / Math.PI;
+      if (ang > 165 || ang < 8) continue;
+      const edgePt = (a, other) => {
+        let nx = -a.u[1], ny = a.u[0];
+        if (nx * other.u[0] + ny * other.u[1] < 0) { nx = -nx; ny = -ny; }
+        return [Vx[0] + nx * a.half, Vx[1] + ny * a.half];
+      };
+      const P1 = edgePt(a1, a2), P2 = edgePt(a2, a1);
+      const det = a1.u[0] * (-a2.u[1]) - a1.u[1] * (-a2.u[0]);
+      if (Math.abs(det) < 0.08) continue;
+      const rx = P2[0] - P1[0], ry = P2[1] - P1[1];
+      const s = (rx * (-a2.u[1]) - ry * (-a2.u[0])) / det;
+      const X = [P1[0] + s * a1.u[0], P1[1] + s * a1.u[1]];
+      const dX = Math.hypot(X[0] - Vx[0], X[1] - Vx[1]);
+      if (dX > 14 || dX < 0.5) continue;
+      const col = a1.half >= a2.half ? a1.col : a2.col;
+      const ring = [V, [P1[1] / MLAT, P1[0] / MLNG], [X[1] / MLAT, X[0] / MLNG], [P2[1] / MLAT, P2[0] / MLNG], V];
+      feats.push({ type: 'Feature', properties: { col }, geometry: { type: 'Polygon', coordinates: [GJ(ring)] } });
+    }
+  });
+  return { type: 'FeatureCollection', features: feats };
+}
 function buildSel(which) {   // the selected sector's side lines (vibrant)
   const feats = [];
   if (sel) {
@@ -1660,7 +1728,7 @@ function buildSelC() {   // the selected sector's core: a vibrant BAND when comp
 }
 const HIT = { type: 'FeatureCollection', features: names.flatMap(n => GEO[n].cuts.map((ab, i) => ({ type: 'Feature', properties: { name: n, idx: i }, geometry: { type: 'LineString', coordinates: GJ(GEO[n].stitched.slice(ab[0], ab[1] + 1)) } }))) };
 let CUR = null;
-function rebuildData() { const F = buildFamilies(); const SC = buildSelC(); CUR = { centres: F.centres, bands: F.bands, edges: F.edges, sel: SC.sel, selBand: SC.selBand, selEdges: buildSel('e') }; }
+function rebuildData() { const F = buildFamilies(); const SC = buildSelC(); CUR = { centres: F.centres, bands: F.bands, edges: F.edges, patches: buildPatches(), sel: SC.sel, selBand: SC.selBand, selEdges: buildSel('e') }; }
 
 function applyMixed() {
   pieces = freshPieces();
@@ -1709,6 +1777,7 @@ function addStack() {
     map.addSource('selBand', { type: 'geojson', data: CUR.selBand });
     map.addSource('selEdges', { type: 'geojson', data: CUR.selEdges });
     map.addSource('selGlow', { type: 'geojson', data: buildSelGlow() });
+    map.addSource('patches', { type: 'geojson', data: CUR.patches });
     map.addSource('hit', { type: 'geojson', data: HIT });
     map.addSource('labels', { type: 'geojson', data: LABELS });
   }
@@ -1716,6 +1785,9 @@ function addStack() {
   const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer, before); };
   const line = (id, source, paint, layout, filter) => { const o = { id, type: 'line', source, layout: Object.assign({ 'line-cap': 'round', 'line-join': 'miter' }, layout || {}), paint }; if (filter) o.filter = filter; return o; };   // NOTE: a present-but-undefined `filter` key makes MapLibre silently drop the layer (found by the QA tour, 2026-10-28)
   // --- T1: integrated — the road surface itself carries the state ---
+  // junction centre patches FIRST (bottom of the stack): the strands
+  // draw over them, so only the otherwise-unpainted centre shows.
+  add({ id: 't1-patch', type: 'fill', source: 'patches', paint: { 'fill-color': ['get', 'col'], 'fill-opacity': 1 } });
   add(line('t1-casing', 'centres', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 4.5, 16, 9, 17, 12.5, 18, 18.5, 19, 28], 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-casingb', 'bands', { 'line-color': baseMode === 'night' ? '#000000' : '#5a5f6a', 'line-width': BANDCASE, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   add(line('t1-surface', 'centres', { 'line-color': ['get', 'col'], 'line-width': surfW, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
@@ -1791,6 +1863,7 @@ function applyStates() {
     map.getSource('centres').setData(CUR.centres);
     map.getSource('bands').setData(CUR.bands);
     map.getSource('edges').setData(CUR.edges);
+    if (map.getSource('patches')) map.getSource('patches').setData(CUR.patches);
     map.getSource('sel').setData(CUR.sel);
     map.getSource('selBand').setData(CUR.selBand);
     map.getSource('selEdges').setData(CUR.selEdges);
@@ -1945,7 +2018,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r17-0708).
+// at build time (r18-0810).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
