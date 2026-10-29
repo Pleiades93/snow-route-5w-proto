@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r25-1038">
+<meta name="build" content="r26-1138">
 </head>
 <body>
 <div id="map"></div>
@@ -42,9 +42,6 @@
     <button data-zoom="14.6">Overview</button><button data-zoom="16.8">Working</button><button data-zoom="18.4">Close</button>
     <span class="lab" style="width:auto;margin-left:6px">Scene</span>
     <button data-preset="fresh" class="on">Fresh</button><button data-preset="mixed">Mixed day</button><button data-preset="done">All done</button>
-  </div>
-  <div class="row"><span class="lab">Colour</span>
-    <button data-scheme="0" class="on">Stock</button><button data-scheme="1">Sunset</button><button data-scheme="2">Metro</button><button data-scheme="3">Jewel</button><button data-scheme="4">Earthy</button><button data-scheme="5">Faves</button>
   </div>
   <div class="row"><span class="lab">Selected</span>
     <button id="sideA" disabled>Left</button><button id="sideB" disabled>Right</button>
@@ -1611,6 +1608,7 @@ function applyMixed() {
 function applyFreshStart() { pieces = freshPieces(); sel = null; }   // round 22 (Andrew): the page opens with every road unfinished; Mixed stays available on its Scene button
 applyFreshStart();
 rebuildData();
+setScheme(2);   // METRO locked as Andrew's final palette (round 26) - gold #ffc233 / raspberry #ef476f / mint #06d6a0. Runs after the gate-prefix init, before the map paints, so the prototype opens in Metro; the other schemes stay dormant in SCHEMES.
 
 // ================= map & treatments =================
 // Background registry — SETTLED by Andrew 2026-10-28 (round 12):
@@ -1943,7 +1941,6 @@ document.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click'
   const z = +b.dataset.zoom;
   if (reducedMotion) map.jumpTo({ center: CENTRE, zoom: z }); else map.flyTo({ center: CENTRE, zoom: z, duration: 650 });
 }));
-document.querySelectorAll('[data-scheme]').forEach(b => b.addEventListener('click', () => { document.querySelectorAll('[data-scheme]').forEach(x => x.classList.toggle('on', x === b)); applyScheme(+b.dataset.scheme); }));
 document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('[data-preset]').forEach(x => x.classList.toggle('on', x === b));
   if (b.dataset.preset === 'fresh') { pieces = freshPieces(); sel = null; }
@@ -1962,7 +1959,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r25-1038).
+// at build time (r26-1138).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
