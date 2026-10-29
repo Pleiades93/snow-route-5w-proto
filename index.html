@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r34-1250">
+<meta name="build" content="r35-1259">
 </head>
 <body>
 <div id="map"></div>
@@ -314,8 +314,30 @@ names.forEach(n => {
   for (let k = 1; k < seg.length; k++) { const d = jDistM(seg[k - 1], seg[k]); if (acc + d >= target) { const t = d ? (target - acc) / d : 0; anchor = [seg[k - 1][0] + (seg[k][0] - seg[k - 1][0]) * t, seg[k - 1][1] + (seg[k][1] - seg[k - 1][1]) * t]; break; } acc += d; }
   labelPointFeatures.push({ type: 'Feature', properties: { name: n, len: Math.round(segLenM(stitched)) }, geometry: { type: 'Point', coordinates: GJ([anchor])[0] } });
 });
+// Round 35 (Andrew): Fifth's label anchor sits at its Greenpark
+// junction, so the name reads as if it belongs to the yellow street.
+// Push it 45 m away from Greenpark's line - the text sits just off
+// Fifth's own corner instead of on the junction paint.
+(function nudgeFifth() {
+  const f = labelPointFeatures.find(x => x.properties.name === 'Fifth');
+  if (!f) return;
+  const A0 = [f.geometry.coordinates[1], f.geometry.coordinates[0]];
+  const gp = GEO['Greenpark'].stitched;
+  let bd = 1e9, bq = A0;
+  for (let k = 1; k < gp.length; k++) {
+    const a = gp[k - 1], b = gp[k], vx = (b[1] - a[1]) * MLNG, vy = (b[0] - a[0]) * MLAT;
+    const wx = (A0[1] - a[1]) * MLNG, wy = (A0[0] - a[0]) * MLAT, L2 = vx * vx + vy * vy;
+    let t = L2 ? (wx * vx + wy * vy) / L2 : 0; t = Math.max(0, Math.min(1, t));
+    const q = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], d = jDistM(A0, q);
+    if (d < bd) { bd = d; bq = q; }
+  }
+  const dx = (A0[1] - bq[1]) * MLNG, dy = (A0[0] - bq[0]) * MLAT, dl = Math.hypot(dx, dy) || 1;
+  f.geometry.coordinates = [A0[1] + (dx / dl) * 45 / MLNG, A0[0] + (dy / dl) * 45 / MLAT];
+})();
 const LABELS = { type: 'FeatureCollection', features: labelFeatures };
 const LABELPTS = { type: 'FeatureCollection', features: labelPointFeatures };
+const ROUTEPOI = (() => { let a = 90, b = -90, c = 180, d = -180; names.forEach(n => GEO[n].stitched.forEach(p => { a = Math.min(a, p[0]); b = Math.max(b, p[0]); c = Math.min(c, p[1]); d = Math.max(d, p[1]); })); return { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [(c + d) / 2, (a + b) / 2] } }; })();
+
 // ---- unified strands (Andrew, 2026-10-28): the route is painted as
 // STRANDS, not per-street pieces. Slices of the same colour that touch -
 // along a street OR across a junction, through straights and right turns -
@@ -1728,6 +1750,7 @@ function addStack() {
     map.addSource('hit', { type: 'geojson', data: HIT });
     map.addSource('labels', { type: 'geojson', data: LABELS });
     map.addSource('labelpts', { type: 'geojson', data: LABELPTS });
+    map.addSource('routepoi', { type: 'geojson', data: ROUTEPOI });
   }
   const before = firstSymbolId();
   const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer, before); };
@@ -1774,19 +1797,28 @@ function addStack() {
   add(line('t1-sele', 'selEdges', { 'line-color': ['get', 'col'], 'line-width': 3, 'line-opacity': 1 }, { 'line-cap': 'butt' }));
   // --- hit + labels (every treatment) ---
   add(line('hit', 'hit', { 'line-color': '#fff', 'line-width': 24, 'line-opacity': 0 }));
-  // Round 34 (Andrew): below 16.2 the route's names ride POINT labels
-  // at each street's SPOT anchor - they render even on short streets
-  // where a line-placed label cannot fit (at Overview only a couple
-  // of long streets used to get names). One label system per zoom:
-  // points below 16.2, the placed line labels from 16.2 up. Same
-  // layer in both modes, so day/night text sizes are identical by
-  // construction - the size mismatch he saw was the two basemaps' own
-  // road labels, which stay hidden (round 33's un-hiding reverted at
-  // his word: he wanted HIS route's names populated, not all names).
-  add({ id: 'streetnamespt', type: 'symbol', source: 'labelpts', maxzoom: 16.2, layout: { 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 13.5, 9.5, 14.6, 10.5, 16.2, 12], 'text-padding': 2, 'symbol-sort-key': ['-', ['get', 'len']], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.4 } });
   if (!map.getLayer('streetnames')) {   // id must not contain 'label': the app's glHideLabels rule would hide it (found by the label probe, 2026-10-28)
     map.addLayer({ id: 'streetnames', type: 'symbol', source: 'labels', minzoom: 16.2, layout: { 'symbol-placement': 'line', 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 7.5, 16, 10.5, 18, 20], 'text-rotation-alignment': 'map', 'text-pitch-alignment': 'viewport' }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.4 } });
   }
+  // Round 35 (Andrew): the point labels now sit at the TOP of the
+  // stack (appended last, like streetnames) so basemap symbols can no
+  // longer knock them out - in Light, housenumber/POI symbols were
+  // silently killing Velmar's name. They exist only from zoom 14 up:
+  // zoomed further out he wants just the city names. When a centred
+  // name collides, text-variable-anchor lets the renderer try above /
+  // below / beside the point instead of dropping the name outright -
+  // that is what rescues Bloomingdale, whose neighbours sit ~23 px
+  // away at Overview no matter where along its segment it anchors.
+  if (!map.getLayer('streetnamespt')) {
+    map.addLayer({ id: 'streetnamespt', type: 'symbol', source: 'labelpts', minzoom: 14, maxzoom: 16.2, layout: { 'text-field': ['get', 'name'], 'text-font': fontStack, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 10, 14.6, 10.5, 16.2, 12], 'text-padding': 1, 'text-variable-anchor': ['center', 'top', 'bottom', 'left', 'right'], 'text-radial-offset': 0.8, 'symbol-sort-key': ['-', ['get', 'len']], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.4 } });
+  }
+  // Round 35 (Andrew): zoomed far out, the route cluster blurs into a
+  // blob - below 13.5 every route paint layer hands over to a single
+  // point of interest at the route's centre.
+  add({ id: 'routepoi-ring', type: 'circle', source: 'routepoi', maxzoom: 13.5, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 7, 13.5, 9], 'circle-color': '#ffffff', 'circle-opacity': 0.95 } });
+  add({ id: 'routepoi-dot', type: 'circle', source: 'routepoi', maxzoom: 13.5, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4.5, 13.5, 6.5], 'circle-color': '#ef476f' } });
+  add({ id: 'routepoi-txt', type: 'symbol', source: 'routepoi', maxzoom: 13.5, layout: { 'text-field': 'Route 5W', 'text-font': fontStack, 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1.1, 0], 'text-allow-overlap': false }, paint: { 'text-color': baseMode === 'night' ? '#e8e8e8' : '#333333', 'text-halo-color': baseMode === 'night' ? 'rgba(0,0,0,.8)' : 'rgba(255,255,255,.9)', 'text-halo-width': 1.6 } });
+  ['t1-casing', 't1-casingb', 't1-surface', 't1-band', 't1-edge', 't1-sel', 't1-selband', 't1-sele', 'sel-core-s', 'sel-core-b', 'hit'].concat([1, 2, 3, 4, 5].flatMap(i => ['sel-glow' + i + '-s', 'sel-glow' + i + '-b'])).forEach(id => { if (map.getLayer(id)) map.setLayerZoomRange(id, 0, 13.5); });
   glHideLabels(map);
   applyStates();
   applyGlow();
@@ -2053,7 +2085,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r34-1250).
+// at build time (r35-1259).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
