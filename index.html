@@ -27,7 +27,7 @@
   #updShow { display: none; left: auto; right: 10px; bottom: 56px; font-size: 13px; }
   .maplibregl-ctrl-attrib { font-size: 9px; }
 </style>
-<meta name="build" content="r16-0647">
+<meta name="build" content="r17-0708">
 </head>
 <body>
 <div id="map"></div>
@@ -1316,11 +1316,12 @@ function capLineFor(B, viB, Ix, Vx) {
   // The crossing street's NEAR paint edge beside this junction, as a
   // line {px, py, nx, ny} (point + unit normal pointing toward the
   // street being clipped). Built from B's actual arms: each arm
-  // contributes its edge point at the vertex (V + armNormal * bHalf);
-  // with two arms the cap line runs through both points, which is
-  // what makes a BENT crossing street (Blackburn at Columbus) butt
-  // cleanly - a single averaged direction leaves a corner past the
-  // arm that bends away.
+  // contributes its edge point at the vertex (V + armNormal * Wmin,
+  // Wmin = the SMALLER of the arms' paint halves - see below); with
+  // two arms at different angles the cap line runs through both
+  // points, which is what makes a BENT crossing street (Blackburn
+  // at Columbus) butt cleanly - a single averaged direction leaves
+  // a corner past the arm that bends away.
   const st = GEO[B].stitched, Vp = st[viB];
   let pPrev = null, pNext = null;
   for (let k = viB - 1; k >= 0; k--) { if (jDistM(st[k], Vp) >= 1) { pPrev = st[k]; break; } }
@@ -1329,32 +1330,67 @@ function capLineFor(B, viB, Ix, Vx) {
   if (pPrev) arms.push(pPrev);
   if (pNext) arms.push(pNext);
   if (!arms.length) return null;
+  const armHalf = p => {
+    // ROUND 17 (second-opinion F1, measured live at Columbus x
+    // Blackburn: 1.54 m poke one way, 1.5 m gap the other): the
+    // arm's half used to be read from the ONE segment touching the
+    // vertex (segK = viB-1 / viB). At a DOUBLE vertex that segment
+    // is the degenerate hop owned by the short spanning mini-cut
+    // between the twins - not by the arm beyond it - so the cap was
+    // built with the mini-cut's width in the real arm's direction.
+    // Now: walk the arm's first ~10 m (skipping zero-length
+    // segments) and take the MINIMUM half among the segments met -
+    // the ending face can touch any of them, and the minimum is
+    // the flush choice under the min-half doctrine (a wider
+    // segment's own paint covers the step longitudinally).
+    const isPrev = p === pPrev;
+    let s = isPrev ? viB - 1 : viB;
+    const step = isPrev ? -1 : 1;
+    let acc = 0, half = null;
+    while (s >= 0 && s < st.length - 1 && acc < 10) {
+      const len = jDistM(st[s + 1], st[s]);
+      if (len >= 0.5) {
+        let h = SURF_HALF;
+        GEO[B].cuts.forEach((ab, i) => { if (ab[0] <= s && s + 1 <= ab[1] && pieces[B][i] === 3) h = BAND_HALF; });
+        half = half === null ? h : Math.min(half, h);
+        acc += len;
+      }
+      s += step;
+    }
+    return half === null ? SURF_HALF : half;
+  };
+  // ROUND 17 (Andrew's differential demand): both arms' edge points
+  // sit at the MINIMUM arm half. An ending paint's face is ONE
+  // straight/kinked line; against a STEPPED crossing edge (a band
+  // arm at 4.8 beside a surface arm at 3.3) a line through the arms'
+  // own edges leaves a basemap wedge at one corner (the Tina x
+  // Blackburn sliver), and the round-15 wider-arm fallback left the
+  // ending paint a full step short on the narrow side (the gaps
+  // Andrew zoomed into). At the minimum half the face is flush
+  // where it meets the NARROW arm; on the WIDE arm's side, the
+  // region between the face and the wide edge lies inside the wide
+  // arm's own strip - its paint runs longitudinally through the
+  // junction and covers that region itself. No wedge, no overlap,
+  // and for equal arms nothing changes (the perfect crossings stay
+  // exactly as they were).
+  const Wmin = Math.min.apply(null, arms.map(armHalf));
   const W = arms.map(p => {
     const P = XYOf(p);
     let ux = P[0] - Vx[0], uy = P[1] - Vx[1]; const m = Math.hypot(ux, uy) || 1; ux /= m; uy /= m;
     let nx = -uy, ny = ux;
     if ((Ix[0] - Vx[0]) * nx + (Ix[1] - Vx[1]) * ny < 0) { nx = -nx; ny = -ny; }
-    // each arm's edge point uses THAT arm's paint half: at a
-    // mixed-family bend (a band arm beside a surface arm) the true
-    // near edge is the kinked line through both arms' own edges.
-    const segK = p === pPrev ? viB - 1 : viB;
-    let half = SURF_HALF;
-    GEO[B].cuts.forEach((ab, i) => { if (ab[0] <= segK && segK + 1 <= ab[1] && pieces[B][i] === 3) half = BAND_HALF; });
-    return [Vx[0] + nx * half, Vx[1] + ny * half, nx, ny];
+    return [Vx[0] + nx * Wmin, Vx[1] + ny * Wmin, nx, ny];
   });
   if (W.length === 2) {
     let cx = W[1][0] - W[0][0], cy = W[1][1] - W[0][1]; const m = Math.hypot(cx, cy);
     if (m >= 0.05) {
       // the kinked line is only meaningful when the street BENDS:
-      // on a straight street both edge points sit on the SAME ray
-      // from V (V + normal * each arm's half), so the line through
-      // them is the ray itself - it crosses the street instead of
-      // edging it, and passes through V (round 15, Fifth x
-      // Greenpark: sd(V) read 0.00 and no clip ever fired). When
-      // V's distance to the through-line is under 0.5 m, fall
-      // through to the single-arm line below - at the WIDER arm's
-      // edge, so a mixed-width junction (band arm beside a surface
-      // arm) can leave a hairline notch but never an overlap.
+      // on a straight street both edge points coincide (same
+      // normal, same Wmin offset), so the through-line degenerates.
+      // When V's distance to the through-line is under 0.5 m, fall
+      // through to the single-arm line below - which is the same
+      // Wmin edge, so a straight crossing street gets its minimum-
+      // half edge line either way.
       const ux = cx / m, uy = cy / m;
       const distV = Math.abs((Vx[0] - W[0][0]) * uy - (Vx[1] - W[0][1]) * ux);
       if (distV >= 0.5) { cx /= m; cy /= m; let nx = -cy, ny = cx; if ((Ix[0] - Vx[0]) * nx + (Ix[1] - Vx[1]) * ny < 0) { nx = -nx; ny = -ny; } return { px: W[0][0], py: W[0][1], nx, ny }; }
@@ -1411,6 +1447,20 @@ function clipEndAtJunction(n, vi, pts, atStart, ownHalf) {
       // Test instead: does the end or either corner cross the
       // crossing street's near paint-edge LINE (the very line the
       // cap will lie on)?
+      // ROUND 17 NOTE: this trigger stays SPANS-ONLY on purpose.
+      // Widening it to terminating crossing streets was tried
+      // (build r17-0703) and REGRESSED: the straight cap at a
+      // terminating street's near edge retreats the whole face,
+      // and this street's continuing paint starts at the vertex -
+      // leaving a basemap hole at the junction (Velmar x Astona
+      // white wedge, Fifth x Bloomingdale white square, both
+      // measured on the r17 pixel renders). A terminating street
+      // has no paint on the far side to meet the retreated face.
+      // The correct face there is STEPPED (edge line across the
+      // terminating street's arm, vertex elsewhere), which a
+      // single-width polyline end cannot draw. The face through
+      // the vertex - the same square corner every spanning
+      // crossing shows - is the lesser defect and stays.
       if (ge) {
         const bst = GEO[J.B].stitched;
         const spans = (grp.filter(e => e.n === J.B)).some(e => e.vi > 0 && e.vi < bst.length - 1);
@@ -1487,14 +1537,22 @@ function clipEndAtJunction(n, vi, pts, atStart, ownHalf) {
       // the first depth whose true corners clear every crossing
       // street's paint - the paint merges into the other street
       // instead of poking across it.
+      // ROUND 17 (second-opinion F3): the loop used to return the
+      // slice UNCLIPPED when no depth cleared the corners - a
+      // silent full overlap with no record. Now it tracks the
+      // least-poking candidate and, on exhaustion, applies it when
+      // it pokes less than the original end (never worse than the
+      // old behaviour, usually metres better).
+      const exOf = cand => { const cc = endCorners(cand, atStart, ownHalf); if (cc.length < 2) return Infinity; let m = 0; entries.forEach(J => { cc.forEach(cp => { m = Math.max(m, pokeExcess(cp, J.B, V)); }); }); return m; };
+      const origEx = exOf(pts);
+      let fbApplied = false, bestCand = null, bestEx = Infinity;
       for (let d = 0.25; d <= 8.01; d += 0.25) {
         const cand = pullbackEnd(pts, atStart, d);
-        const cc = endCorners(cand, atStart, ownHalf);
-        if (cc.length < 2) break;
-        let okAll = true;
-        entries.forEach(J => { cc.forEach(cp => { if (pokeExcess(cp, J.B, V) > 0.10) okAll = false; }); });
-        if (okAll) { pts = cand; break; }
+        const ex = exOf(cand);
+        if (ex < bestEx) { bestEx = ex; bestCand = cand; }
+        if (ex <= 0.10) { pts = cand; fbApplied = true; break; }
       }
+      if (!fbApplied && bestCand && bestEx < origEx) pts = bestCand;
       continue;
     }
   }
@@ -1577,8 +1635,16 @@ function selectedGeom() {   // the selected stretch's painted slice: stitched po
   const g = GEO[sel.name], ab = g.cuts[sel.idx], bits = pieces[sel.name][sel.idx];
   const half = bits === 3 ? BAND_HALF : SURF_HALF;
   let pts = g.stitched.slice(ab[0], ab[1] + 1);
-  pts = clipEndAtJunction(sel.name, ab[0], pts, true, half);
-  pts = clipEndAtJunction(sel.name, ab[1], pts, false, half);
+  // ROUND 17 (second-opinion F7): clip an end ONLY where the paint
+  // family actually changes there - the same rule buildFamilies
+  // applies to the base paint. Clipping unconditionally made the
+  // vibrant overlay (and its glow) stop 3.3-4.8 m short of the base
+  // paint at every continuing junction: a visible "gap" in exactly
+  // the state Andrew inspects most, a selected stretch.
+  const famKey = i => pieces[sel.name][i] === 3 ? 'band' : mute(colOf(sel.name, pieces[sel.name][i]));
+  const key = famKey(sel.idx);
+  if (sel.idx === 0 || famKey(sel.idx - 1) !== key) pts = clipEndAtJunction(sel.name, ab[0], pts, true, half);
+  if (sel.idx === g.cuts.length - 1 || famKey(sel.idx + 1) !== key) pts = clipEndAtJunction(sel.name, ab[1], pts, false, half);
   return { pts, bits, half };
 }
 function buildSelC() {   // the selected sector's core: a vibrant BAND when complete, a vibrant core otherwise
@@ -1879,7 +1945,7 @@ document.getElementById('panelShow').addEventListener('click', () => { document.
 // Update button (Andrew, 2026-10-28): the prototype link never changes,
 // but phones cache the page - this checks the served build stamp and,
 // if a newer build is live, reloads past the cache. Stamp is baked in
-// at build time (r16-0647).
+// at build time (r17-0708).
 const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
 if (BUILD) { document.getElementById('buildLab').textContent = BUILD; document.querySelectorAll('.updBtn').forEach(b => b.textContent = '⟳ Update · ' + BUILD); }
 document.querySelectorAll('.updBtn').forEach(btn => btn.addEventListener('click', async () => {
